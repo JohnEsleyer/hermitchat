@@ -10,7 +10,9 @@ dependencies:
   flutter:
     sdk: flutter
   google_fonts: ^6.1.0
+  http: ^1.6.0
   lucide_icons: ^0.257.0
+  shared_preferences: ^2.5.4
 
 dev_dependencies:
   flutter_test:

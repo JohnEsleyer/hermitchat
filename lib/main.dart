@@ -2,7 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
-void main() {
+import 'api_service.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await ApiService().init();
   runApp(const HermitChatApp());
 }
 
@@ -45,6 +49,16 @@ class Agent {
     required this.status,
     required this.model,
   });
+
+  factory Agent.fromJson(Map<String, dynamic> json) {
+    return Agent(
+      id: json['id'].toString(),
+      name: json['name']?.toString() ?? 'Unknown',
+      role: json['role']?.toString() ?? 'assistant',
+      status: json['status']?.toString() ?? 'standby',
+      model: json['model']?.toString() ?? 'unknown',
+    );
+  }
 }
 
 class ChatMessage {
@@ -224,15 +238,30 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   bool _isLoading = false;
+  final _ipCtrl = TextEditingController(text: ApiService().baseUrl ?? '');
+  final _userCtrl = TextEditingController();
+  final _passCtrl = TextEditingController();
 
-  void _handleLogin() {
+  void _handleLogin() async {
     setState(() => _isLoading = true);
-    Future.delayed(const Duration(seconds: 1), () {
+    final success = await ApiService().login(
+      _ipCtrl.text.trim(),
+      _userCtrl.text.trim(),
+      _passCtrl.text.trim(),
+    );
+    if (!mounted) return;
+    setState(() => _isLoading = false);
+    
+    if (success) {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => const MainLayout()),
       );
-    });
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Login failed. Check server URL and credentials.')),
+      );
+    }
   }
 
   @override
@@ -271,11 +300,12 @@ class _LoginScreenState extends State<LoginScreen> {
                   'Server IP / URL',
                   'e.g., http://192.168.1.5:3000',
                   false,
+                  _ipCtrl,
                 ),
                 const SizedBox(height: 16),
-                _buildTextField('Username', 'admin', false),
+                _buildTextField('Username', 'admin', false, _userCtrl),
                 const SizedBox(height: 16),
-                _buildTextField('Password', '••••••••', true),
+                _buildTextField('Password', '••••••••', true, _passCtrl),
                 const SizedBox(height: 32),
                 SizedBox(
                   width: double.infinity,
@@ -315,7 +345,7 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  Widget _buildTextField(String label, String hint, bool isPassword) {
+  Widget _buildTextField(String label, String hint, bool isPassword, TextEditingController controller) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -332,6 +362,7 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
         ),
         TextField(
+          controller: controller,
           obscureText: isPassword,
           decoration: InputDecoration(
             hintText: hint,
@@ -425,8 +456,32 @@ class _MainLayoutState extends State<MainLayout> {
   }
 }
 
-class AgentsScreen extends StatelessWidget {
+class AgentsScreen extends StatefulWidget {
   const AgentsScreen({super.key});
+
+  @override
+  State<AgentsScreen> createState() => _AgentsScreenState();
+}
+
+class _AgentsScreenState extends State<AgentsScreen> {
+  List<Agent> _agents = [];
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAgents();
+  }
+
+  Future<void> _loadAgents() async {
+    final data = await ApiService().getAgents();
+    if (mounted) {
+      setState(() {
+        _agents = data.map((json) => Agent.fromJson(json)).toList();
+        _isLoading = false;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -476,14 +531,19 @@ class AgentsScreen extends StatelessWidget {
         ),
         const SizedBox(height: 16),
         Expanded(
-          child: ListView.builder(
+          child: _isLoading 
+            ? const Center(child: CircularProgressIndicator(color: Colors.white))
+            : ListView.builder(
             padding: EdgeInsets.zero,
-            itemCount: mockAgents.length,
+            itemCount: _agents.length,
             itemBuilder: (context, index) {
-              final agent = mockAgents[index];
+              final agent = _agents[index];
               final isRunning = agent.status == 'running';
-              final lastMsg = mockChatHistory.lastWhere(
-                (m) => m.role != 'system',
+              final lastMsg = ChatMessage(
+                role: 'system', 
+                content: 'Active connection to OS', 
+                timestamp: DateTime.now(), 
+                isRead: true
               );
 
               return GestureDetector(
@@ -643,36 +703,50 @@ class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   bool _takeoverMode = false;
-  final List<ChatMessage> _messages = List.from(mockChatHistory);
+  final List<ChatMessage> _messages = [];
 
-  void _sendMessage() {
-    if (_controller.text.trim().isEmpty) return;
+  void _sendMessage() async {
+    final text = _controller.text.trim();
+    if (text.isEmpty) return;
+    
     setState(() {
       _messages.add(
         ChatMessage(
           role: 'user',
-          content: _controller.text,
+          content: text,
           timestamp: DateTime.now(),
-          isRead: false,
+          isRead: true,
         ),
       );
       _controller.clear();
     });
     _scrollToBottom();
-    Future.delayed(const Duration(seconds: 1), () {
-      if (!mounted) return;
-      setState(() {
+    
+    final response = await ApiService().sendMessage(widget.agent.id, text);
+    if (!mounted) return;
+    
+    setState(() {
+      if (response != null) {
         _messages.add(
           ChatMessage(
             role: 'assistant',
-            content: 'Got it! Processing your request...',
+            content: response,
             timestamp: DateTime.now(),
-            isRead: false,
+            isRead: true,
           ),
         );
-      });
-      _scrollToBottom();
+      } else {
+        _messages.add(
+          ChatMessage(
+            role: 'system',
+            content: 'Error: Failed to reach the agent.',
+            timestamp: DateTime.now(),
+            isRead: true,
+          ),
+        );
+      }
     });
+    _scrollToBottom();
   }
 
   void _scrollToBottom() {
@@ -1007,71 +1081,113 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 }
 
-class DashboardScreen extends StatelessWidget {
+class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
 
   @override
+  State<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends State<DashboardScreen> {
+  Map<String, dynamic>? _metrics;
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMetrics();
+  }
+
+  Future<void> _loadMetrics() async {
+    final data = await ApiService().getMetrics();
+    if (mounted) {
+      setState(() {
+        _metrics = data;
+        _isLoading = false;
+      });
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SizedBox(height: 24),
-          const Text(
-            'system health',
-            style: TextStyle(fontSize: 32, fontWeight: FontWeight.w900),
-          ),
-          const SizedBox(height: 24),
-          Row(
+    final host = _metrics?['host'] ?? {};
+    final containers = _metrics?['containers'] as List<dynamic>? ?? [];
+    
+    final cpuVal = host['cpuPercent'] ?? host['cpu'] ?? 0.0;
+    final memVal = host['memUsageMB'] ?? host['memory'] ?? 0.0;
+    
+    final cpuStr = (cpuVal is num) ? cpuVal.toStringAsFixed(1) : '0.0';
+    final memStr = (memVal is num) ? (memVal / 1024).toStringAsFixed(1) : '0.0'; 
+
+    return _isLoading 
+      ? const Center(child: CircularProgressIndicator(color: Colors.white))
+      : Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: _buildMetricCard(
-                  'CPU',
-                  '14.2',
-                  '%',
-                  LucideIcons.cpu,
-                  Colors.white,
-                ),
+              const SizedBox(height: 24),
+              const Text(
+                'system health',
+                style: TextStyle(fontSize: 32, fontWeight: FontWeight.w900),
               ),
-              const SizedBox(width: 16),
+              const SizedBox(height: 24),
+              Row(
+                children: [
+                  Expanded(
+                    child: _buildMetricCard(
+                      'CPU',
+                      cpuStr,
+                      '%',
+                      LucideIcons.cpu,
+                      Colors.white,
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: _buildMetricCard(
+                      'RAM',
+                      memStr,
+                      'gb',
+                      LucideIcons.memoryStick,
+                      Colors.white,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              _buildMetricCard(
+                'STORAGE',
+                '45.1',
+                'gb',
+                LucideIcons.hardDrive,
+                Colors.white,
+              ),
+              const SizedBox(height: 32),
+              const Text(
+                'active containers',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 16),
               Expanded(
-                child: _buildMetricCard(
-                  'RAM',
-                  '2.4',
-                  'gb',
-                  LucideIcons.memoryStick,
-                  Colors.white,
+                child: ListView.builder(
+                  itemCount: containers.length,
+                  itemBuilder: (context, index) {
+                    final c = containers[index];
+                    final name = c['name']?.toString() ?? 'unknown';
+                    final cCpu = c['cpu'] ?? 0.0;
+                    final cMem = c['memory'] ?? 0.0;
+                    
+                    final cCpuStr = (cCpu is num) ? cCpu.toStringAsFixed(1) + '%' : '0.0%';
+                    final cMemStr = (cMem is num) ? cMem.toStringAsFixed(0) + ' MB' : '0 MB';
+                    
+                    return _buildContainerRow(name, cCpuStr, cMemStr);
+                  },
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 16),
-          _buildMetricCard(
-            'STORAGE',
-            '45.1',
-            'gb',
-            LucideIcons.hardDrive,
-            Colors.white,
-          ),
-          const SizedBox(height: 32),
-          const Text(
-            'active containers',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 16),
-          Expanded(
-            child: ListView(
-              children: [
-                _buildContainerRow('agent-ralph', '1.2%', '140 MB'),
-                _buildContainerRow('agent-ava', '0.1%', '95 MB'),
-                _buildContainerRow('hermit-traefik', '0.0%', '25 MB'),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
+        );
   }
 
   Widget _buildMetricCard(
