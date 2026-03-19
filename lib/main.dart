@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
+import 'package:webview_flutter/webview_flutter.dart';
 import 'api_service.dart';
 
 void main() async {
@@ -412,6 +413,7 @@ class _MainLayoutState extends State<MainLayout> {
   late final List<Widget> _screens = [
     const AgentsScreen(),
     const DashboardScreen(),
+    const AppsScreen(),
     SettingsScreen(onLogout: _handleLogout),
   ];
 
@@ -444,6 +446,10 @@ class _MainLayoutState extends State<MainLayout> {
             BottomNavigationBarItem(
               icon: Icon(LucideIcons.activity),
               label: 'system',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(LucideIcons.layoutGrid),
+              label: 'apps',
             ),
             BottomNavigationBarItem(
               icon: Icon(LucideIcons.settings),
@@ -1294,8 +1300,30 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  String _urlMode = 'tunnel';
+  bool _tunnelEnabled = true;
+  String _tunnelUrl = '';
+  bool _isLoading = true;
   String _timeOffset = '0';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSettings();
+  }
+
+  Future<void> _loadSettings() async {
+    final api = ApiService();
+    final settings = await api.getSettings();
+    if (settings != null && mounted) {
+      setState(() {
+        _tunnelEnabled = settings['tunnelEnabled'] == true || settings['tunnelEnabled'] == 'true';
+        _tunnelUrl = settings['tunnelURL'] ?? '';
+        _isLoading = false;
+      });
+    } else if (mounted) {
+      setState(() => _isLoading = false);
+    }
+  }
 
   final List<Map<String, String>> _timePresets = [
     {'label': 'UTC', 'value': '0', 'desc': 'London'},
@@ -1381,152 +1409,69 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Widget _buildPublicUrlSection() {
     return _buildSectionCard(
-      title: 'Public URL Configuration',
+      title: 'Cloudflare Tunnel',
       icon: LucideIcons.globe,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Expanded(
-                child: GestureDetector(
-                  onTap: () => setState(() => _urlMode = 'tunnel'),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    decoration: BoxDecoration(
-                      color: _urlMode == 'tunnel'
-                          ? Colors.white
-                          : Colors.transparent,
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                        color: _urlMode == 'tunnel'
-                            ? Colors.white
-                            : const Color(0xFF27272A),
-                      ),
-                    ),
-                    alignment: Alignment.center,
-                    child: Text(
-                      'Cloudflare Tunnel',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 12,
-                        color: _urlMode == 'tunnel'
-                            ? Colors.black
-                            : Colors.grey,
-                      ),
-                    ),
-                  ),
-                ),
+              const Text(
+                'Enable Cloudflare Tunnel',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: GestureDetector(
-                  onTap: () => setState(() => _urlMode = 'domain'),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    decoration: BoxDecoration(
-                      color: _urlMode == 'domain'
-                          ? Colors.white
-                          : Colors.transparent,
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                        color: _urlMode == 'domain'
-                            ? Colors.white
-                            : const Color(0xFF27272A),
-                      ),
-                    ),
-                    alignment: Alignment.center,
-                    child: Text(
-                      'Custom Domain',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 12,
-                        color: _urlMode == 'domain'
-                            ? Colors.black
-                            : Colors.grey,
-                      ),
-                    ),
-                  ),
-                ),
+              Switch(
+                value: _tunnelEnabled,
+                activeTrackColor: const Color(0xFF10B981).withOpacity(0.5),
+                activeColor: const Color(0xFF10B981),
+                onChanged: _isLoading
+                    ? null
+                    : (val) async {
+                        setState(() => _isLoading = true);
+                        final success = await ApiService()
+                            .updateSettings({'tunnelEnabled': val});
+                        if (success) {
+                          setState(() {
+                            _tunnelEnabled = val;
+                            _isLoading = false;
+                          });
+                        } else {
+                          setState(() => _isLoading = false);
+                        }
+                      },
               ),
             ],
           ),
-          const SizedBox(height: 16),
-          if (_urlMode == 'tunnel') ...[
-            const Text(
-              'The system automatically orchestrates cloudflared CLI to create a tunnel URL for the dashboard and agents.',
-              style: TextStyle(color: Colors.grey, fontSize: 12),
-            ),
+          const SizedBox(height: 8),
+          Text(
+            'Allows external access to the dashboard and apps.',
+            style: TextStyle(color: Colors.grey[400], fontSize: 13),
+          ),
+          if (_tunnelEnabled && _tunnelUrl.isNotEmpty) ...[
             const SizedBox(height: 16),
             Container(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: Colors.black,
-                borderRadius: BorderRadius.circular(16),
+                color: const Color(0xFF09090B),
                 border: Border.all(color: const Color(0xFF27272A)),
+                borderRadius: BorderRadius.circular(12),
               ),
               child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'CURRENT TUNNEL URL',
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: Colors.grey,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 1,
-                        ),
+                  const Icon(LucideIcons.link, size: 16, color: Color(0xFF10B981)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _tunnelUrl,
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        color: Color(0xFF10B981),
+                        fontSize: 13,
                       ),
-                      SizedBox(height: 4),
-                      Text(
-                        'https://mock-tunnel.trycloudflare.com',
-                        style: TextStyle(
-                          fontFamily: 'monospace',
-                          color: Color(0xFF34D399),
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
-                  ),
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF27272A),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Icon(
-                      LucideIcons.refreshCw,
-                      size: 16,
-                      color: Colors.white,
                     ),
                   ),
                 ],
-              ),
-            ),
-          ] else ...[
-            const Text(
-              'Use your own domain or subdomain. The system will automatically configure Let\'s Encrypt for HTTPS.',
-              style: TextStyle(color: Colors.grey, fontSize: 12),
-            ),
-            const SizedBox(height: 16),
-            _buildTextField('Base Domain', 'e.g. mydomain.com', obscure: false),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: () {},
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.white,
-                  foregroundColor: Colors.black,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                ),
-                child: const Text(
-                  'Verify & Save',
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
               ),
             ),
           ],
@@ -1923,6 +1868,149 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ),
       ],
+    );
+  }
+}
+
+class AppsScreen extends StatefulWidget {
+  const AppsScreen({super.key});
+
+  @override
+  State<AppsScreen> createState() => _AppsScreenState();
+}
+
+class _AppsScreenState extends State<AppsScreen> {
+  List<dynamic> _apps = [];
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchApps();
+  }
+
+  Future<void> _fetchApps() async {
+    final apps = await ApiService().getApps();
+    if (mounted) {
+      setState(() {
+        _apps = apps;
+        _isLoading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Center(
+        child: CircularProgressIndicator(color: Color(0xFF10B981)),
+      );
+    }
+    if (_apps.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(LucideIcons.layoutGrid, size: 48, color: Color(0xFF52525B)),
+            const SizedBox(height: 16),
+            Text(
+              'No apps found',
+              style: TextStyle(color: Colors.grey[400], fontSize: 16),
+            ),
+          ],
+        ),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 24, 16, 24),
+          child: Text(
+            'apps',
+            style: TextStyle(fontSize: 32, fontWeight: FontWeight.w900),
+          ),
+        ),
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            itemCount: _apps.length,
+            itemBuilder: (context, index) {
+              final app = _apps[index];
+              return Card(
+                color: const Color(0xFF09090B),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  side: const BorderSide(color: Color(0xFF27272A)),
+                ),
+                margin: const EdgeInsets.only(bottom: 12),
+                child: ListTile(
+                  contentPadding: const EdgeInsets.all(16),
+                  leading: const CircleAvatar(
+                    backgroundColor: Color(0xFF27272A),
+                    radius: 24,
+                    child: Icon(LucideIcons.layoutGrid, color: Colors.white),
+                  ),
+                  title: Text(
+                    app['name'],
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+                  ),
+                  subtitle: Text(
+                    'Agent: ${app['agentName']} | Container: ${app['containerId']}',
+                    style: const TextStyle(color: Colors.grey),
+                  ),
+                  trailing: const Icon(LucideIcons.chevronRight, color: Colors.grey),
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => AppViewerScreen(
+                          appName: app['name'],
+                          url: '${ApiService().baseUrl}${app['url']}',
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class AppViewerScreen extends StatefulWidget {
+  final String appName;
+  final String url;
+  const AppViewerScreen({super.key, required this.appName, required this.url});
+
+  @override
+  State<AppViewerScreen> createState() => _AppViewerScreenState();
+}
+
+class _AppViewerScreenState extends State<AppViewerScreen> {
+  late final WebViewController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setBackgroundColor(const Color(0x00000000))
+      ..loadRequest(Uri.parse(widget.url));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.appName),
+        backgroundColor: Colors.black,
+        iconTheme: const IconThemeData(color: Colors.white),
+      ),
+      body: WebViewWidget(controller: _controller),
     );
   }
 }

@@ -118,4 +118,54 @@ class ApiService {
     }
     return null;
   }
+
+  Future<List<dynamic>> getApps() async {
+    if (baseUrl == null) return [];
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/apps'),
+        headers: _headers,
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body) as List<dynamic>;
+      }
+    } catch (e) {
+      print('Get apps error: $e');
+    }
+    return [];
+  }
+
+  Future<Map<String, dynamic>?> getSettings() async {
+    if (baseUrl == null) return null;
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/settings'),
+        headers: _headers,
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      }
+    } catch (e) {
+      print('Get settings error: $e');
+    }
+    return null;
+  }
+
+  Future<bool> updateSettings(Map<String, dynamic> settings) async {
+    if (baseUrl == null) return false;
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/settings'),
+        headers: _headers,
+        body: jsonEncode(settings),
+      ).timeout(const Duration(seconds: 10));
+
+      return response.statusCode == 200;
+    } catch (e) {
+      print('Update settings error: $e');
+      return false;
+    }
+  }
 }
