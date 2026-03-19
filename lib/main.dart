@@ -3,12 +3,203 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:video_player/video_player.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'api_service.dart';
+
+final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  const AndroidInitializationSettings initializationSettingsAndroid = AndroidInitializationSettings('@mipmap/ic_launcher');
+  const InitializationSettings initializationSettings = InitializationSettings(android: initializationSettingsAndroid);
+  await flutterLocalNotificationsPlugin.initialize(initializationSettings);
+
   await ApiService().init();
   runApp(const HermitChatApp());
+}
+
+class CalendarEventModel {
+  final int id;
+  final int agentId;
+  final String agent;
+  final String date;
+  final String time;
+  final String prompt;
+  final bool executed;
+
+  CalendarEventModel({
+    required this.id,
+    required this.agentId,
+    required this.agent,
+    required this.date,
+    required this.time,
+    required this.prompt,
+    required this.executed,
+  });
+
+  factory CalendarEventModel.fromJson(Map<String, dynamic> json) {
+    return CalendarEventModel(
+      id: json['id'] as int,
+      agentId: json['agentId'] as int,
+      agent: json['agent'] as String? ?? 'Unknown',
+      date: json['date'] as String? ?? '',
+      time: json['time'] as String? ?? '',
+      prompt: json['prompt'] as String? ?? '',
+      executed: json['executed'] as bool? ?? false,
+    );
+  }
+}
+
+class CalendarScreen extends StatefulWidget {
+  const CalendarScreen({super.key});
+
+  @override
+  State<CalendarScreen> createState() => _CalendarScreenState();
+}
+
+class _CalendarScreenState extends State<CalendarScreen> {
+  List<CalendarEventModel> _events = [];
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadEvents();
+  }
+
+  Future<void> _loadEvents() async {
+    final data = await ApiService().getCalendarEvents();
+    if (mounted) {
+      setState(() {
+        _events = data.map((e) => CalendarEventModel.fromJson(e)).toList();
+        _events.sort((a, b) {
+          final timeA = a.date + a.time;
+          final timeB = b.date + b.time;
+          return timeA.compareTo(timeB);
+        });
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _deleteEvent(int id) async {
+    final success = await ApiService().deleteCalendarEvent(id);
+    if (success) {
+      _loadEvents();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      appBar: AppBar(
+        title: const Text('calendar', style: TextStyle(fontWeight: FontWeight.w900)),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+      ),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : _events.isEmpty
+              ? const Center(child: Text('No upcoming events', style: TextStyle(color: Colors.grey)))
+              : ListView.builder(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: _events.length,
+                  itemBuilder: (context, index) {
+                    final event = _events[index];
+                    return Card(
+                      color: const Color(0xFF09090B),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                        side: const BorderSide(color: Color(0xFF27272A)),
+                      ),
+                      margin: const EdgeInsets.only(bottom: 12),
+                      child: ListTile(
+                        leading: CircleAvatar(
+                          backgroundColor: event.executed ? const Color(0xFF10B981).withValues(alpha: 0.2) : const Color(0xFF3F3F46),
+                          child: Icon(
+                            event.executed ? LucideIcons.check : LucideIcons.calendar,
+                            color: event.executed ? const Color(0xFF10B981) : Colors.white,
+                          ),
+                        ),
+                        title: Text(event.prompt, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                        subtitle: Text('${event.date} at ${event.time} • Agent: ${event.agent}', style: const TextStyle(color: Colors.grey)),
+                        trailing: IconButton(
+                          icon: const Icon(LucideIcons.trash2, color: Colors.redAccent),
+                          onPressed: () => _deleteEvent(event.id),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+    );
+  }
+}
+
+class _VideoPlayerWidget extends StatefulWidget {
+  final String url;
+  final String token;
+  const _VideoPlayerWidget({required this.url, required this.token});
+
+  @override
+  State<_VideoPlayerWidget> createState() => _VideoPlayerWidgetState();
+}
+
+class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
+  late VideoPlayerController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = VideoPlayerController.networkUrl(
+      Uri.parse(widget.url),
+      httpHeaders: {'Authorization': 'Bearer ${widget.token}'},
+    )..initialize().then((_) {
+        setState(() {});
+      });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_controller.value.isInitialized) {
+      return const SizedBox(
+        height: 150,
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+    return AspectRatio(
+      aspectRatio: _controller.value.aspectRatio,
+      child: Stack(
+        alignment: Alignment.bottomCenter,
+        children: [
+          VideoPlayer(_controller),
+          VideoProgressIndicator(_controller, allowScrubbing: true, colors: const VideoProgressColors(playedColor: Colors.red)),
+          Center(
+            child: IconButton(
+              icon: Icon(
+                _controller.value.isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled,
+                color: Colors.white.withValues(alpha: 0.8),
+                size: 50,
+              ),
+              onPressed: () {
+                setState(() {
+                  _controller.value.isPlaying ? _controller.pause() : _controller.play();
+                });
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
 }
 
 class HermitChatApp extends StatelessWidget {
@@ -42,6 +233,7 @@ class Agent {
   final String role;
   final String status;
   final String model;
+  final String? profilePic;
 
   Agent({
     required this.id,
@@ -49,6 +241,7 @@ class Agent {
     required this.role,
     required this.status,
     required this.model,
+    this.profilePic,
   });
 
   factory Agent.fromJson(Map<String, dynamic> json) {
@@ -58,6 +251,7 @@ class Agent {
       role: json['role']?.toString() ?? 'assistant',
       status: json['status']?.toString() ?? 'standby',
       model: json['model']?.toString() ?? 'unknown',
+      profilePic: json['profilePic']?.toString(),
     );
   }
 }
@@ -67,12 +261,14 @@ class ChatMessage {
   final String content;
   final DateTime timestamp;
   final bool isRead;
+  final List<String>? files;
 
   ChatMessage({
     required this.role,
     required this.content,
     required this.timestamp,
     this.isRead = false,
+    this.files,
   });
 }
 
@@ -268,56 +464,53 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24.0),
-          child: Container(
-            constraints: const BoxConstraints(maxWidth: 400),
-            padding: const EdgeInsets.all(32.0),
-            decoration: BoxDecoration(
-              color: const Color(0xFF09090B),
-              borderRadius: BorderRadius.circular(40),
-              border: Border.all(color: const Color(0xFF27272A)),
-            ),
+      backgroundColor: const Color(0xFF09090B),
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 32.0, vertical: 24.0),
             child: Column(
-              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const HermitMascot(size: 80, showGlow: true),
-                const SizedBox(height: 24),
+                const HermitMascot(size: 100, showGlow: true),
+                const SizedBox(height: 32),
                 const Text(
                   'hermitchat',
                   style: TextStyle(
-                    fontSize: 32,
+                    fontSize: 36,
                     fontWeight: FontWeight.w900,
-                    letterSpacing: -1,
+                    letterSpacing: -1.2,
+                    color: Colors.white,
                   ),
                 ),
+                const SizedBox(height: 8),
                 const Text(
                   'agent orchestration client',
-                  style: TextStyle(color: Colors.grey, fontSize: 14),
+                  style: TextStyle(color: Colors.grey, fontSize: 16),
                 ),
-                const SizedBox(height: 40),
+                const SizedBox(height: 60),
                 _buildTextField(
                   'Server IP / URL',
                   'e.g., http://192.168.1.5:3000',
                   false,
                   _ipCtrl,
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 20),
                 _buildTextField('Username', 'admin', false, _userCtrl),
-                const SizedBox(height: 16),
+                const SizedBox(height: 20),
                 _buildTextField('Password', '••••••••', true, _passCtrl),
-                const SizedBox(height: 32),
+                const SizedBox(height: 48),
                 SizedBox(
                   width: double.infinity,
-                  height: 56,
+                  height: 60,
                   child: ElevatedButton(
                     onPressed: _isLoading ? null : _handleLogin,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.white,
                       foregroundColor: Colors.black,
+                      elevation: 0,
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(30),
+                        borderRadius: BorderRadius.circular(16),
                       ),
                     ),
                     child: _isLoading
@@ -333,7 +526,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             'Connect to OS',
                             style: TextStyle(
                               fontWeight: FontWeight.bold,
-                              fontSize: 16,
+                              fontSize: 18,
                             ),
                           ),
                   ),
@@ -351,40 +544,37 @@ class _LoginScreenState extends State<LoginScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
-          padding: const EdgeInsets.only(left: 16, bottom: 8),
+          padding: const EdgeInsets.only(left: 4, bottom: 8),
           child: Text(
             label.toUpperCase(),
             style: const TextStyle(
-              fontSize: 10,
+              fontSize: 11,
               fontWeight: FontWeight.bold,
               color: Colors.grey,
-              letterSpacing: 1,
+              letterSpacing: 1.2,
             ),
           ),
         ),
         TextField(
           controller: controller,
           obscureText: isPassword,
+          style: const TextStyle(color: Colors.white),
           decoration: InputDecoration(
             hintText: hint,
             hintStyle: const TextStyle(color: Color(0xFF52525B)),
             filled: true,
-            fillColor: Colors.black,
+            fillColor: const Color(0xFF18181B),
             contentPadding: const EdgeInsets.symmetric(
-              horizontal: 24,
+              horizontal: 20,
               vertical: 20,
             ),
             border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(30),
-              borderSide: const BorderSide(color: Color(0xFF27272A)),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(30),
-              borderSide: const BorderSide(color: Color(0xFF27272A)),
+              borderRadius: BorderRadius.circular(16),
+              borderSide: BorderSide.none,
             ),
             focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(30),
-              borderSide: const BorderSide(color: Colors.white),
+              borderRadius: BorderRadius.circular(16),
+              borderSide: const BorderSide(color: Color(0xFF3F3F46)),
             ),
           ),
         ),
@@ -414,6 +604,7 @@ class _MainLayoutState extends State<MainLayout> {
     const AgentsScreen(),
     const DashboardScreen(),
     const AppsScreen(),
+    const CalendarScreen(),
     SettingsScreen(onLogout: _handleLogout),
   ];
 
@@ -433,6 +624,7 @@ class _MainLayoutState extends State<MainLayout> {
           border: Border(top: BorderSide(color: Color(0xFF27272A))),
         ),
         child: BottomNavigationBar(
+          type: BottomNavigationBarType.fixed,
           backgroundColor: Colors.black,
           selectedItemColor: Colors.white,
           unselectedItemColor: const Color(0xFF52525B),
@@ -450,6 +642,10 @@ class _MainLayoutState extends State<MainLayout> {
             BottomNavigationBarItem(
               icon: Icon(LucideIcons.layoutGrid),
               label: 'apps',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(LucideIcons.calendar),
+              label: 'calendar',
             ),
             BottomNavigationBarItem(
               icon: Icon(LucideIcons.settings),
@@ -706,10 +902,57 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> {
-  final TextEditingController _controller = TextEditingController();
-  final ScrollController _scrollController = ScrollController();
-  bool _takeoverMode = false;
   final List<ChatMessage> _messages = [];
+  bool _isLoading = true;
+  StreamSubscription? _wsSubscription;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMessages();
+    
+    _wsSubscription = ApiService().messageStream.listen((data) {
+      if (!mounted) return;
+      if (data['type'] == 'new_message' && data['agent_id'].toString() == widget.agent.id.toString()) {
+        setState(() {
+          // Check if message already exists
+          if (!_messages.any((m) => m.content == data['content'] && m.role == data['role'])) {
+             _messages.add(
+              ChatMessage(
+                role: data['role'],
+                content: data['content'],
+                timestamp: DateTime.now(),
+                isRead: true,
+              ),
+            );
+            _scrollToBottom();
+          }
+        });
+        
+        if (data['role'] == 'assistant') {
+          _showNotification(data['content']);
+        }
+      }
+    });
+  }
+
+  Future<void> _loadMessages() async {
+    // We could fetch actual history here if we had an endpoint for it in ApiService
+    // For now, it's enough to clear and wait for new ones or we can mock it
+    setState(() => _isLoading = false);
+  }
+
+  Future<void> _showNotification(String body) async {
+    const AndroidNotificationDetails androidPlatformChannelSpecifics = AndroidNotificationDetails(
+      'hermit_chat', 'Agent Messages',
+      importance: Importance.max,
+      priority: Priority.high,
+    );
+    const NotificationDetails platformChannelSpecifics = NotificationDetails(android: androidPlatformChannelSpecifics);
+    await flutterLocalNotificationsPlugin.show(
+      0, 'Hermit Agent', body.length > 50 ? body.substring(0, 50) + '...' : body, platformChannelSpecifics,
+    );
+  }
 
   void _sendMessage() async {
     final text = _controller.text.trim();
@@ -733,12 +976,17 @@ class _ChatScreenState extends State<ChatScreen> {
     
     setState(() {
       if (response != null) {
+        final message = response['message'] as String? ?? response['response'] as String? ?? '';
+        final filesDynamic = response['files'] as List<dynamic>? ?? [];
+        final files = filesDynamic.map((f) => f.toString()).toList();
+        
         _messages.add(
           ChatMessage(
             role: 'assistant',
-            content: response,
+            content: message,
             timestamp: DateTime.now(),
             isRead: true,
+            files: files.isNotEmpty ? files : null,
           ),
         );
       } else {
@@ -769,6 +1017,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    _wsSubscription?.cancel();
     _controller.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -884,20 +1133,149 @@ class _ChatScreenState extends State<ChatScreen> {
   ) {
     Color bgColor;
     Color textColor;
-    Color tailColor;
 
     if (isUser) {
       bgColor = const Color(0xFF1A1A1A);
       textColor = Colors.white;
-      tailColor = const Color(0xFF1A1A1A);
     } else if (isSystem) {
       bgColor = const Color(0xFF0A2A1A);
       textColor = const Color(0xFF6EE7B7);
-      tailColor = const Color(0xFF0A2A1A);
     } else {
       bgColor = const Color(0xFF0F0F0F);
       textColor = const Color(0xFFE4E4E7);
-      tailColor = const Color(0xFF0F0F0F);
+    }
+
+    final baseUrl = ApiService().baseUrl ?? '';
+    final avatarUrl = widget.agent.profilePic != null ? '$baseUrl${widget.agent.profilePic}' : null;
+
+    Widget bubbleContent = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.only(
+          topLeft: const Radius.circular(18),
+          topRight: const Radius.circular(18),
+          bottomLeft: isUser
+              ? const Radius.circular(18)
+              : const Radius.circular(4),
+          bottomRight: isUser
+              ? const Radius.circular(4)
+              : const Radius.circular(18),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (msg.content.isNotEmpty)
+            Text(
+              msg.content,
+              style: TextStyle(color: textColor, fontSize: 15, height: 1.3),
+            ),
+          const SizedBox(height: 4),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                _formatTime(msg.timestamp),
+                style: TextStyle(
+                  fontSize: 11,
+                  color: textColor.withValues(alpha: 0.5),
+                ),
+              ),
+              if (isUser) ...[
+                const SizedBox(width: 4),
+                Icon(
+                  msg.isRead ? LucideIcons.checkCheck : LucideIcons.check,
+                  size: 14,
+                  color: msg.isRead
+                      ? const Color(0xFF10B981)
+                      : textColor.withValues(alpha: 0.5),
+                ),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+
+    if (msg.files != null && msg.files!.isNotEmpty) {
+      List<Widget> fileWidgets = [];
+      for (final file in msg.files!) {
+        final containerId = 'agent-${widget.agent.name.toLowerCase().replaceAll(' ', '')}';
+        final fileUrl = '$baseUrl/api/containers/$containerId/download?file=$file';
+        final ext = file.split('.').last.toLowerCase();
+        
+        if (['png', 'jpg', 'jpeg', 'gif', 'webp'].contains(ext)) {
+          fileWidgets.add(
+            Padding(
+              padding: const EdgeInsets.only(top: 8.0),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Image.network(fileUrl, headers: {'Authorization': 'Bearer ${ApiService().token}'}),
+              ),
+            ),
+          );
+        } else if (['mp4', 'webm'].contains(ext)) {
+          fileWidgets.add(
+            Padding(
+              padding: const EdgeInsets.only(top: 8.0),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: _VideoPlayerWidget(url: fileUrl, token: ApiService().token ?? ''),
+              ),
+            ),
+          );
+        } else {
+          fileWidgets.add(
+            Padding(
+              padding: const EdgeInsets.only(top: 8.0),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(LucideIcons.file, color: Colors.blue),
+                  const SizedBox(width: 8),
+                  Text(file, style: const TextStyle(color: Colors.blue)),
+                ],
+              ),
+            ),
+          );
+        }
+      }
+      
+      bubbleContent = Column(
+        crossAxisAlignment: isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        children: [
+          bubbleContent,
+          ...fileWidgets,
+        ],
+      );
+    }
+
+    if (!isUser && !isSystem) {
+      return Padding(
+        padding: EdgeInsets.only(left: 12, right: 60, top: isFirst ? 8 : 2, bottom: 2),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            if (isFirst)
+              CircleAvatar(
+                radius: 14,
+                backgroundColor: const Color(0xFF1A1A1A),
+                backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl, headers: {'Authorization': 'Bearer ${ApiService().token}'}) : null,
+                child: avatarUrl == null ? Text(widget.agent.name[0], style: const TextStyle(fontSize: 10)) : null,
+              )
+            else
+              const SizedBox(width: 28),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: bubbleContent,
+              ),
+            ),
+          ],
+        ),
+      );
     }
 
     return Padding(
@@ -907,60 +1285,9 @@ class _ChatScreenState extends State<ChatScreen> {
         top: isFirst ? 8 : 2,
         bottom: 2,
       ),
-      child: Column(
-        crossAxisAlignment: isUser
-            ? CrossAxisAlignment.end
-            : CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            decoration: BoxDecoration(
-              color: bgColor,
-              borderRadius: BorderRadius.only(
-                topLeft: const Radius.circular(18),
-                topRight: const Radius.circular(18),
-                bottomLeft: isUser
-                    ? const Radius.circular(18)
-                    : const Radius.circular(4),
-                bottomRight: isUser
-                    ? const Radius.circular(4)
-                    : const Radius.circular(18),
-              ),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  msg.content,
-                  style: TextStyle(color: textColor, fontSize: 15, height: 1.3),
-                ),
-                const SizedBox(height: 4),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      _formatTime(msg.timestamp),
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: textColor.withValues(alpha: 0.5),
-                      ),
-                    ),
-                    if (isUser) ...[
-                      const SizedBox(width: 4),
-                      Icon(
-                        msg.isRead ? LucideIcons.checkCheck : LucideIcons.check,
-                        size: 14,
-                        color: msg.isRead
-                            ? const Color(0xFF10B981)
-                            : textColor.withValues(alpha: 0.5),
-                      ),
-                    ],
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ],
+      child: Align(
+        alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+        child: bubbleContent,
       ),
     );
   }
@@ -1423,8 +1750,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               Switch(
                 value: _tunnelEnabled,
-                activeTrackColor: const Color(0xFF10B981).withOpacity(0.5),
-                activeColor: const Color(0xFF10B981),
+                activeTrackColor: const Color(0xFF10B981).withValues(alpha: 0.5),
+                activeThumbColor: const Color(0xFF10B981),
                 onChanged: _isLoading
                     ? null
                     : (val) async {
