@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
@@ -12,9 +14,13 @@ final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterL
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
-  const AndroidInitializationSettings initializationSettingsAndroid = AndroidInitializationSettings('@mipmap/ic_launcher');
-  const InitializationSettings initializationSettings = InitializationSettings(android: initializationSettingsAndroid);
-  await flutterLocalNotificationsPlugin.initialize(initializationSettings);
+  if (!kIsWeb) {
+    const AndroidInitializationSettings initializationSettingsAndroid = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const InitializationSettings initializationSettings = InitializationSettings(
+      android: initializationSettingsAndroid,
+    );
+    await flutterLocalNotificationsPlugin.initialize(settings: initializationSettings);
+  }
 
   await ApiService().init();
   runApp(const HermitChatApp());
@@ -902,8 +908,11 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> {
+  final TextEditingController _controller = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+  bool _takeoverMode = false;
+  bool _isSending = false;
   final List<ChatMessage> _messages = [];
-  bool _isLoading = true;
   StreamSubscription? _wsSubscription;
 
   @override
@@ -943,6 +952,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _showNotification(String body) async {
+    if (kIsWeb) return;
     const AndroidNotificationDetails androidPlatformChannelSpecifics = AndroidNotificationDetails(
       'hermit_chat', 'Agent Messages',
       importance: Importance.max,
@@ -950,15 +960,19 @@ class _ChatScreenState extends State<ChatScreen> {
     );
     const NotificationDetails platformChannelSpecifics = NotificationDetails(android: androidPlatformChannelSpecifics);
     await flutterLocalNotificationsPlugin.show(
-      0, 'Hermit Agent', body.length > 50 ? body.substring(0, 50) + '...' : body, platformChannelSpecifics,
+      id: 0,
+      title: 'Hermit Agent',
+      body: body.length > 50 ? '${body.substring(0, 50)}...' : body,
+      notificationDetails: platformChannelSpecifics,
     );
   }
 
   void _sendMessage() async {
     final text = _controller.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty || _isSending) return;
     
     setState(() {
+      _isSending = true;
       _messages.add(
         ChatMessage(
           role: 'user',
@@ -971,10 +985,11 @@ class _ChatScreenState extends State<ChatScreen> {
     });
     _scrollToBottom();
     
-    final response = await ApiService().sendMessage(widget.agent.id, text);
+    final response = await ApiService().sendMessage(widget.agent.id.toString(), text);
     if (!mounted) return;
     
     setState(() {
+      _isSending = false;
       if (response != null) {
         final message = response['message'] as String? ?? response['response'] as String? ?? '';
         final filesDynamic = response['files'] as List<dynamic>? ?? [];

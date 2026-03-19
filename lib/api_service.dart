@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:async';
+import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:encrypt/encrypt.dart' as enc;
@@ -21,7 +22,7 @@ class ApiService {
   enc.Key _deriveKey(String password) {
     final bytes = utf8.encode(password);
     final digest = sha256.convert(bytes);
-    return enc.Key(Uint8ClampedList.fromList(digest.bytes));
+    return enc.Key(Uint8List.fromList(digest.bytes));
   }
 
   String _encrypt(String text) {
@@ -33,7 +34,7 @@ class ApiService {
       // Combine IV + Ciphertext for the server
       return "enc:${base64.encode(iv.bytes + encrypted.bytes)}";
     } catch (e) {
-      print("Encryption error: $e");
+      // log error
       return text;
     }
   }
@@ -48,7 +49,7 @@ class ApiService {
       final benc = enc.Encrypter(enc.AES(key, mode: enc.AESMode.gcm, padding: null));
       return benc.decrypt(enc.Encrypted(encryptedBytes), iv: iv);
     } catch (e) {
-      print("Decryption error: $e");
+      // log error
       return ciphertext;
     }
   }
@@ -77,7 +78,7 @@ class ApiService {
         }
         _messageController.add(data);
       } catch (e) {
-        print('WS error: $e');
+        // log error
       }
     }, onDone: () {
       Future.delayed(const Duration(seconds: 5), _connectWebSocket);
@@ -121,7 +122,7 @@ class ApiService {
         }
       }
     } catch (e) {
-      print('Login error: $e');
+      // log error
     }
     return false;
   }
@@ -147,7 +148,7 @@ class ApiService {
         return decoded != null ? (decoded as List<dynamic>) : [];
       }
     } catch (e) {
-      print('Get agents error: $e');
+      // log error
     }
     return [];
   }
@@ -172,7 +173,7 @@ class ApiService {
         return data;
       }
     } catch (e) {
-      print('Send msg error: $e');
+      // log error
     }
     return null;
   }
@@ -189,7 +190,7 @@ class ApiService {
         return jsonDecode(response.body) as Map<String, dynamic>;
       }
     } catch (e) {
-      print('Get metrics error: $e');
+      // log error
     }
     return null;
   }
@@ -206,7 +207,7 @@ class ApiService {
         return jsonDecode(response.body) as List<dynamic>;
       }
     } catch (e) {
-      print('Get apps error: $e');
+      // log error
     }
     return [];
   }
@@ -223,7 +224,7 @@ class ApiService {
         return jsonDecode(response.body);
       }
     } catch (e) {
-      print('Get settings error: $e');
+      // log error
     }
     return null;
   }
@@ -239,7 +240,7 @@ class ApiService {
 
       return response.statusCode == 200;
     } catch (e) {
-      print('Update settings error: $e');
+      // log error
       return false;
     }
   }
@@ -253,7 +254,7 @@ class ApiService {
         return decoded != null ? (decoded as List<dynamic>) : [];
       }
     } catch (e) {
-      print('Get calendar error: $e');
+      // log error
     }
     return [];
   }
@@ -273,7 +274,7 @@ class ApiService {
       ).timeout(const Duration(seconds: 10));
       return response.statusCode == 200 || response.statusCode == 201;
     } catch (e) {
-      print('Create calendar error: $e');
+      // log error
     }
     return false;
   }
@@ -287,7 +288,7 @@ class ApiService {
       ).timeout(const Duration(seconds: 10));
       return response.statusCode == 200;
     } catch (e) {
-      print('Delete calendar error: $e');
+      // log error
     }
     return false;
   }
