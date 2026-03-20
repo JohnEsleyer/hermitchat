@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:async';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:image_picker/image_picker.dart'; // XFile
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:encrypt/encrypt.dart' as enc;
 import 'package:crypto/crypto.dart';
@@ -16,8 +18,10 @@ class ApiService {
   String? token;
   WebSocketChannel? _channel;
   final _messageController = StreamController<Map<String, dynamic>>.broadcast();
+  final _healthController = StreamController<Map<String, dynamic>>.broadcast();
 
   Stream<Map<String, dynamic>> get messageStream => _messageController.stream;
+  Stream<Map<String, dynamic>> get healthStream => _healthController.stream;
 
   enc.Key _deriveKey(String password) {
     final bytes = utf8.encode(password);
@@ -70,13 +74,17 @@ class ApiService {
     _channel!.stream.listen((message) {
       try {
         final data = jsonDecode(message);
-        if (data['type'] == 'new_message') {
+        if (data['type'] == 'system_health') {
+          _healthController.add(data['health'] as Map<String, dynamic>);
+        } else if (data['type'] == 'new_message') {
            // Decrypt content if it's encrypted
            if (data['content'] != null) {
              data['content'] = _decrypt(data['content']);
            }
+           _messageController.add(data);
+        } else {
+          _messageController.add(data);
         }
-        _messageController.add(data);
       } catch (e) {
         // log error
       }
@@ -229,6 +237,23 @@ class ApiService {
     return null;
   }
 
+  Future<Map<String, dynamic>?> getServerTime() async {
+    if (baseUrl == null) return null;
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/time'),
+        headers: _headers,
+      ).timeout(const Duration(seconds: 5));
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      }
+    } catch (e) {
+      // log error
+    }
+    return null;
+  }
+
   Future<bool> updateSettings(Map<String, dynamic> settings) async {
     if (baseUrl == null) return false;
     try {
@@ -257,6 +282,79 @@ class ApiService {
       // log error
     }
     return [];
+  }
+
+  Future<bool> updateAgent(String id, Map<String, dynamic> agentData) async {
+    if (baseUrl == null) return false;
+    try {
+      final response = await http.put(
+        Uri.parse('$baseUrl/api/agents/$id'),
+        headers: _headers,
+        body: jsonEncode(agentData),
+      ).timeout(const Duration(seconds: 30));
+
+      return response.statusCode == 200;
+    } catch (e) {
+      // log error
+      return false;
+    }
+  }
+
+  Future<String?> uploadImage(XFile file) async {
+    if (baseUrl == null) return null;
+    try {
+      var request = http.MultipartRequest('POST', Uri.parse('$baseUrl/api/images/upload'));
+      if (token != null) {
+        request.headers['Authorization'] = 'Bearer $token';
+      }
+      
+      if (kIsWeb) {
+        request.files.add(http.MultipartFile.fromBytes(
+          'file', 
+          await file.readAsBytes(),
+          filename: file.name
+        ));
+      } else {
+        request.files.add(await http.MultipartFile.fromPath('file', file.path));
+      }
+      
+      var streamedResponse = await request.send();
+      var response = await http.Response.fromStream(streamedResponse);
+      
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return data['url'] as String?;
+      }
+    } catch (e) {
+      // log error
+    }
+    return null;
+  }
+
+  Future<bool> uploadFileToContainer(String containerId, XFile file) async {
+    if (baseUrl == null) return false;
+    try {
+      var request = http.MultipartRequest('POST', Uri.parse('$baseUrl/api/containers/$containerId/upload'));
+      if (token != null) {
+        request.headers['Authorization'] = 'Bearer $token';
+      }
+      
+      if (kIsWeb) {
+        request.files.add(http.MultipartFile.fromBytes(
+          'file', 
+          await file.readAsBytes(),
+          filename: file.name
+        ));
+      } else {
+        request.files.add(await http.MultipartFile.fromPath('file', file.path));
+      }
+      
+      var streamedResponse = await request.send();
+      return streamedResponse.statusCode == 200;
+    } catch (e) {
+      // log error
+    }
+    return false;
   }
 
   Future<bool> createCalendarEvent(int agentId, String date, String time, String prompt) async {
@@ -291,5 +389,23 @@ class ApiService {
       // log error
     }
     return false;
+  }
+
+  Future<Map<String, dynamic>?> createAgent(Map<String, dynamic> agentData) async {
+    if (baseUrl == null) return null;
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/agents'),
+        headers: _headers,
+        body: jsonEncode(agentData),
+      ).timeout(const Duration(seconds: 30));
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+    } catch (e) {
+      // log error
+    }
+    return null;
   }
 }
