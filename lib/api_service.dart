@@ -33,7 +33,9 @@ class ApiService {
     try {
       final key = _deriveKey("hermit123");
       final iv = enc.IV.fromSecureRandom(12); // GCM typical nonce size
-      final benc = enc.Encrypter(enc.AES(key, mode: enc.AESMode.gcm, padding: null));
+      final benc = enc.Encrypter(
+        enc.AES(key, mode: enc.AESMode.gcm, padding: null),
+      );
       final encrypted = benc.encrypt(text, iv: iv);
       // Combine IV + Ciphertext for the server
       return "enc:${base64.encode(iv.bytes + encrypted.bytes)}";
@@ -50,7 +52,9 @@ class ApiService {
       final data = base64.decode(ciphertext.substring(4));
       final iv = enc.IV(data.sublist(0, 12));
       final encryptedBytes = data.sublist(12);
-      final benc = enc.Encrypter(enc.AES(key, mode: enc.AESMode.gcm, padding: null));
+      final benc = enc.Encrypter(
+        enc.AES(key, mode: enc.AESMode.gcm, padding: null),
+      );
       return benc.decrypt(enc.Encrypted(encryptedBytes), iv: iv);
     } catch (e) {
       // log error
@@ -71,26 +75,29 @@ class ApiService {
     if (baseUrl == null) return;
     final wsUrl = baseUrl!.replaceFirst('http', 'ws') + '/api/ws';
     _channel = WebSocketChannel.connect(Uri.parse(wsUrl));
-    _channel!.stream.listen((message) {
-      try {
-        final data = jsonDecode(message);
-        if (data['type'] == 'system_health') {
-          _healthController.add(data['health'] as Map<String, dynamic>);
-        } else if (data['type'] == 'new_message') {
-           // Decrypt content if it's encrypted
-           if (data['content'] != null) {
-             data['content'] = _decrypt(data['content']);
-           }
-           _messageController.add(data);
-        } else {
-          _messageController.add(data);
+    _channel!.stream.listen(
+      (message) {
+        try {
+          final data = jsonDecode(message);
+          if (data['type'] == 'system_health') {
+            _healthController.add(data['health'] as Map<String, dynamic>);
+          } else if (data['type'] == 'new_message') {
+            // Decrypt content if it's encrypted
+            if (data['content'] != null) {
+              data['content'] = _decrypt(data['content']);
+            }
+            _messageController.add(data);
+          } else {
+            _messageController.add(data);
+          }
+        } catch (e) {
+          // log error
         }
-      } catch (e) {
-        // log error
-      }
-    }, onDone: () {
-      Future.delayed(const Duration(seconds: 5), _connectWebSocket);
-    });
+      },
+      onDone: () {
+        Future.delayed(const Duration(seconds: 5), _connectWebSocket);
+      },
+    );
   }
 
   Future<void> logout() async {
@@ -109,18 +116,20 @@ class ApiService {
       url = 'http://$url';
     }
     try {
-      final response = await http.post(
-        Uri.parse('$url/api/auth/login'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'username': username, 'password': password}),
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .post(
+            Uri.parse('$url/api/auth/login'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'username': username, 'password': password}),
+          )
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         if (data['success'] == true) {
           baseUrl = url;
           token = data['token']?.toString();
-          
+
           final prefs = await SharedPreferences.getInstance();
           await prefs.setString('server_url', url);
           if (token != null) {
@@ -138,7 +147,7 @@ class ApiService {
   Map<String, String> get _headers {
     final headers = {'Content-Type': 'application/json'};
     if (token != null) {
-      headers['Authorization'] = 'Bearer $token'; 
+      headers['Authorization'] = 'Bearer $token';
     }
     return headers;
   }
@@ -146,10 +155,9 @@ class ApiService {
   Future<List<dynamic>> getAgents() async {
     if (baseUrl == null) return [];
     try {
-      final response = await http.get(
-        Uri.parse('$baseUrl/api/agents'),
-        headers: _headers,
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .get(Uri.parse('$baseUrl/api/agents'), headers: _headers)
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
@@ -161,14 +169,19 @@ class ApiService {
     return [];
   }
 
-  Future<Map<String, dynamic>?> sendMessage(String agentId, String message) async {
+  Future<Map<String, dynamic>?> sendMessage(
+    String agentId,
+    String message,
+  ) async {
     if (baseUrl == null) return null;
     try {
-      final response = await http.post(
-        Uri.parse('$baseUrl/api/agents/$agentId/chat'),
-        headers: _headers,
-        body: jsonEncode({'message': _encrypt(message)}),
-      ).timeout(const Duration(seconds: 60));
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/api/agents/$agentId/chat'),
+            headers: _headers,
+            body: jsonEncode({'message': _encrypt(message)}),
+          )
+          .timeout(const Duration(seconds: 60));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
@@ -189,10 +202,9 @@ class ApiService {
   Future<Map<String, dynamic>?> getMetrics() async {
     if (baseUrl == null) return null;
     try {
-      final response = await http.get(
-        Uri.parse('$baseUrl/api/metrics'),
-        headers: _headers,
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .get(Uri.parse('$baseUrl/api/metrics'), headers: _headers)
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body) as Map<String, dynamic>;
@@ -206,10 +218,9 @@ class ApiService {
   Future<List<dynamic>> getApps() async {
     if (baseUrl == null) return [];
     try {
-      final response = await http.get(
-        Uri.parse('$baseUrl/api/apps'),
-        headers: _headers,
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .get(Uri.parse('$baseUrl/api/apps'), headers: _headers)
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body) as List<dynamic>;
@@ -223,10 +234,9 @@ class ApiService {
   Future<Map<String, dynamic>?> getSettings() async {
     if (baseUrl == null) return null;
     try {
-      final response = await http.get(
-        Uri.parse('$baseUrl/api/settings'),
-        headers: _headers,
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .get(Uri.parse('$baseUrl/api/settings'), headers: _headers)
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
@@ -240,10 +250,9 @@ class ApiService {
   Future<Map<String, dynamic>?> getServerTime() async {
     if (baseUrl == null) return null;
     try {
-      final response = await http.get(
-        Uri.parse('$baseUrl/api/time'),
-        headers: _headers,
-      ).timeout(const Duration(seconds: 5));
+      final response = await http
+          .get(Uri.parse('$baseUrl/api/time'), headers: _headers)
+          .timeout(const Duration(seconds: 5));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
@@ -257,11 +266,13 @@ class ApiService {
   Future<bool> updateSettings(Map<String, dynamic> settings) async {
     if (baseUrl == null) return false;
     try {
-      final response = await http.post(
-        Uri.parse('$baseUrl/api/settings'),
-        headers: _headers,
-        body: jsonEncode(settings),
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/api/settings'),
+            headers: _headers,
+            body: jsonEncode(settings),
+          )
+          .timeout(const Duration(seconds: 10));
 
       return response.statusCode == 200;
     } catch (e) {
@@ -273,7 +284,9 @@ class ApiService {
   Future<List<dynamic>> getCalendarEvents() async {
     if (baseUrl == null) return [];
     try {
-      final response = await http.get(Uri.parse('$baseUrl/api/calendar'), headers: _headers).timeout(const Duration(seconds: 15));
+      final response = await http
+          .get(Uri.parse('$baseUrl/api/calendar'), headers: _headers)
+          .timeout(const Duration(seconds: 15));
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
         return decoded != null ? (decoded as List<dynamic>) : [];
@@ -287,11 +300,13 @@ class ApiService {
   Future<bool> updateAgent(String id, Map<String, dynamic> agentData) async {
     if (baseUrl == null) return false;
     try {
-      final response = await http.put(
-        Uri.parse('$baseUrl/api/agents/$id'),
-        headers: _headers,
-        body: jsonEncode(agentData),
-      ).timeout(const Duration(seconds: 30));
+      final response = await http
+          .put(
+            Uri.parse('$baseUrl/api/agents/$id'),
+            headers: _headers,
+            body: jsonEncode(agentData),
+          )
+          .timeout(const Duration(seconds: 30));
 
       return response.statusCode == 200;
     } catch (e) {
@@ -303,24 +318,29 @@ class ApiService {
   Future<String?> uploadImage(XFile file) async {
     if (baseUrl == null) return null;
     try {
-      var request = http.MultipartRequest('POST', Uri.parse('$baseUrl/api/images/upload'));
+      var request = http.MultipartRequest(
+        'POST',
+        Uri.parse('$baseUrl/api/images/upload'),
+      );
       if (token != null) {
         request.headers['Authorization'] = 'Bearer $token';
       }
-      
+
       if (kIsWeb) {
-        request.files.add(http.MultipartFile.fromBytes(
-          'file', 
-          await file.readAsBytes(),
-          filename: file.name
-        ));
+        request.files.add(
+          http.MultipartFile.fromBytes(
+            'file',
+            await file.readAsBytes(),
+            filename: file.name,
+          ),
+        );
       } else {
         request.files.add(await http.MultipartFile.fromPath('file', file.path));
       }
-      
+
       var streamedResponse = await request.send();
       var response = await http.Response.fromStream(streamedResponse);
-      
+
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         return data['url'] as String?;
@@ -334,21 +354,26 @@ class ApiService {
   Future<bool> uploadFileToContainer(String containerId, XFile file) async {
     if (baseUrl == null) return false;
     try {
-      var request = http.MultipartRequest('POST', Uri.parse('$baseUrl/api/containers/$containerId/upload'));
+      var request = http.MultipartRequest(
+        'POST',
+        Uri.parse('$baseUrl/api/containers/$containerId/upload'),
+      );
       if (token != null) {
         request.headers['Authorization'] = 'Bearer $token';
       }
-      
+
       if (kIsWeb) {
-        request.files.add(http.MultipartFile.fromBytes(
-          'file', 
-          await file.readAsBytes(),
-          filename: file.name
-        ));
+        request.files.add(
+          http.MultipartFile.fromBytes(
+            'file',
+            await file.readAsBytes(),
+            filename: file.name,
+          ),
+        );
       } else {
         request.files.add(await http.MultipartFile.fromPath('file', file.path));
       }
-      
+
       var streamedResponse = await request.send();
       return streamedResponse.statusCode == 200;
     } catch (e) {
@@ -357,19 +382,26 @@ class ApiService {
     return false;
   }
 
-  Future<bool> createCalendarEvent(int agentId, String date, String time, String prompt) async {
+  Future<bool> createCalendarEvent(
+    int agentId,
+    String date,
+    String time,
+    String prompt,
+  ) async {
     if (baseUrl == null) return false;
     try {
-      final response = await http.post(
-        Uri.parse('$baseUrl/api/calendar'),
-        headers: _headers,
-        body: jsonEncode({
-          'agentId': agentId,
-          'date': date,
-          'time': time,
-          'prompt': prompt,
-        }),
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/api/calendar'),
+            headers: _headers,
+            body: jsonEncode({
+              'agentId': agentId,
+              'date': date,
+              'time': time,
+              'prompt': prompt,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
       return response.statusCode == 200 || response.statusCode == 201;
     } catch (e) {
       // log error
@@ -380,10 +412,9 @@ class ApiService {
   Future<bool> deleteCalendarEvent(int id) async {
     if (baseUrl == null) return false;
     try {
-      final response = await http.delete(
-        Uri.parse('$baseUrl/api/calendar/$id'),
-        headers: _headers,
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .delete(Uri.parse('$baseUrl/api/calendar/$id'), headers: _headers)
+          .timeout(const Duration(seconds: 10));
       return response.statusCode == 200;
     } catch (e) {
       // log error
@@ -391,16 +422,69 @@ class ApiService {
     return false;
   }
 
-  Future<Map<String, dynamic>?> createAgent(Map<String, dynamic> agentData) async {
+  Future<Map<String, dynamic>?> createAgent(
+    Map<String, dynamic> agentData,
+  ) async {
     if (baseUrl == null) return null;
     try {
-      final response = await http.post(
-        Uri.parse('$baseUrl/api/agents'),
-        headers: _headers,
-        body: jsonEncode(agentData),
-      ).timeout(const Duration(seconds: 30));
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/api/agents'),
+            headers: _headers,
+            body: jsonEncode(agentData),
+          )
+          .timeout(const Duration(seconds: 30));
 
       if (response.statusCode == 200 || response.statusCode == 201) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+    } catch (e) {
+      // log error
+    }
+    return null;
+  }
+
+  Future<bool> deleteAgent(String id) async {
+    if (baseUrl == null) return false;
+    try {
+      final response = await http
+          .delete(Uri.parse('$baseUrl/api/agents/$id'), headers: _headers)
+          .timeout(const Duration(seconds: 30));
+      return response.statusCode == 200;
+    } catch (e) {
+      // log error
+    }
+    return false;
+  }
+
+  Future<bool> resetContainer(String containerId) async {
+    if (baseUrl == null) return false;
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/api/containers/$containerId'),
+            headers: _headers,
+            body: jsonEncode({'action': 'reset'}),
+          )
+          .timeout(const Duration(seconds: 30));
+      return response.statusCode == 200;
+    } catch (e) {
+      // log error
+    }
+    return false;
+  }
+
+  Future<Map<String, dynamic>?> getAgentStats(String agentId) async {
+    if (baseUrl == null) return null;
+    try {
+      final response = await http
+          .get(
+            Uri.parse('$baseUrl/api/agents/$agentId/stats'),
+            headers: _headers,
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
         return jsonDecode(response.body) as Map<String, dynamic>;
       }
     } catch (e) {
