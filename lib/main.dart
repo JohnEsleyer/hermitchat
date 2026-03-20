@@ -1970,6 +1970,116 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  /// Builds a file card widget with download button.
+  /// Supports images, videos, and other file types.
+  Widget _buildFileCard(
+    String url,
+    String fileName,
+    String fileType,
+    bool isSystem,
+  ) {
+    final bgColor = isSystem
+        ? const Color(0xFF1A1A1A)
+        : const Color(0xFFE4E4E7);
+    final textColor = isSystem ? Colors.white : Colors.black;
+    final iconColor = isSystem
+        ? const Color(0xFF10B981)
+        : const Color(0xFF10B981);
+
+    IconData icon;
+    switch (fileType) {
+      case 'image':
+        icon = LucideIcons.image;
+        break;
+      case 'video':
+        icon = LucideIcons.video;
+        break;
+      default:
+        icon = LucideIcons.fileText;
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isSystem ? const Color(0xFF27272A) : const Color(0xFFD4D4D8),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (fileType == 'image')
+            ClipRRect(
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(11),
+              ),
+              child: _buildImageWidget(url, fileName),
+            )
+          else if (fileType == 'video')
+            ClipRRect(
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(11),
+              ),
+              child: _VideoPlayerWidget(
+                url: url,
+                token: ApiService().token ?? '',
+              ),
+            ),
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(
+              children: [
+                Icon(icon, size: 20, color: iconColor),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    fileName,
+                    style: TextStyle(
+                      color: textColor,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  icon: Icon(LucideIcons.download, size: 18, color: iconColor),
+                  onPressed: () {
+                    _downloadFile(url, fileName);
+                  },
+                  tooltip: 'Download',
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Downloads a file from the given URL.
+  void _downloadFile(String url, String fileName) async {
+    try {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Downloading $fileName...'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to download: $e'),
+            backgroundColor: const Color(0xFFEF4444),
+          ),
+        );
+      }
+    }
+  }
+
   /// Copies the full context window including skills and conversation history.
   /// Ref: docs/context-window.md
   void _copyContextWindow() async {
@@ -2674,14 +2784,17 @@ class _ChatScreenState extends State<ChatScreen> {
     Color textColor;
 
     if (isUser) {
-      bgColor = const Color(0xFF1A1A1A);
+      // User bubble: Green
+      bgColor = const Color(0xFF10B981);
       textColor = Colors.white;
     } else if (isSystem) {
-      bgColor = const Color(0xFF0A2A1A);
-      textColor = const Color(0xFF6EE7B7);
+      // System bubble: Gray/Blackish
+      bgColor = const Color(0xFF1A1A1A);
+      textColor = const Color(0xFF9CA3AF);
     } else {
-      bgColor = const Color(0xFF0F0F0F);
-      textColor = const Color(0xFFE4E4E7);
+      // AI Agent bubble: White with black text
+      bgColor = const Color(0xFFF4F4F5);
+      textColor = Colors.black;
     }
 
     final baseUrl = ApiService().baseUrl ?? '';
@@ -2689,66 +2802,86 @@ class _ChatScreenState extends State<ChatScreen> {
         ? '$baseUrl${widget.agent.profilePic}'
         : null;
 
-    Widget bubbleContent = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.only(
-          topLeft: const Radius.circular(18),
-          topRight: const Radius.circular(18),
-          bottomLeft: isUser
-              ? const Radius.circular(18)
-              : const Radius.circular(4),
-          bottomRight: isUser
-              ? const Radius.circular(4)
-              : const Radius.circular(18),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (isSystem)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 4),
-              child: Text(
-                'system',
-                style: TextStyle(
-                  color: textColor.withValues(alpha: 0.7),
-                  fontSize: 10,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.8,
-                ),
-              ),
-            ),
-          if (msg.content.isNotEmpty)
-            Text(
-              msg.content,
-              style: TextStyle(color: textColor, fontSize: 15, height: 1.3),
-            ),
-          const SizedBox(height: 4),
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                _formatTime(msg.timestamp),
-                style: TextStyle(
-                  fontSize: 11,
-                  color: textColor.withValues(alpha: 0.5),
-                ),
-              ),
-              if (isUser) ...[
-                const SizedBox(width: 4),
-                Icon(
-                  msg.isRead ? LucideIcons.checkCheck : LucideIcons.check,
-                  size: 14,
-                  color: msg.isRead
-                      ? const Color(0xFF10B981)
-                      : textColor.withValues(alpha: 0.5),
-                ),
-              ],
-            ],
+    Widget bubbleContent = GestureDetector(
+      onLongPress: () {
+        Clipboard.setData(ClipboardData(text: msg.content));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Message copied to clipboard'),
+            duration: Duration(seconds: 2),
           ),
-        ],
+        );
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: bgColor,
+          borderRadius: BorderRadius.only(
+            topLeft: const Radius.circular(18),
+            topRight: const Radius.circular(18),
+            bottomLeft: isUser
+                ? const Radius.circular(18)
+                : const Radius.circular(4),
+            bottomRight: isUser
+                ? const Radius.circular(4)
+                : const Radius.circular(18),
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (isSystem)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      LucideIcons.bot,
+                      size: 12,
+                      color: textColor.withValues(alpha: 0.7),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      'system',
+                      style: TextStyle(
+                        color: textColor.withValues(alpha: 0.7),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.8,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            if (msg.content.isNotEmpty)
+              Text(
+                msg.content,
+                style: TextStyle(color: textColor, fontSize: 15, height: 1.3),
+              ),
+            const SizedBox(height: 4),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  _formatTime(msg.timestamp),
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: textColor.withValues(alpha: 0.5),
+                  ),
+                ),
+                if (isUser) ...[
+                  const SizedBox(width: 4),
+                  Icon(
+                    msg.isRead ? LucideIcons.checkCheck : LucideIcons.check,
+                    size: 14,
+                    color: Colors.white.withValues(alpha: 0.8),
+                  ),
+                ],
+              ],
+            ),
+          ],
+        ),
       ),
     );
 
@@ -2766,34 +2899,21 @@ class _ChatScreenState extends State<ChatScreen> {
           fileWidgets.add(
             Padding(
               padding: const EdgeInsets.only(top: 8.0),
-              child: _buildImageWidget(fileUrl, file),
+              child: _buildFileCard(fileUrl, file, 'image', isSystem),
             ),
           );
-        } else if (['mp4', 'webm'].contains(ext)) {
+        } else if (['mp4', 'webm', 'mov'].contains(ext)) {
           fileWidgets.add(
             Padding(
               padding: const EdgeInsets.only(top: 8.0),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: _VideoPlayerWidget(
-                  url: fileUrl,
-                  token: ApiService().token ?? '',
-                ),
-              ),
+              child: _buildFileCard(fileUrl, file, 'video', isSystem),
             ),
           );
         } else {
           fileWidgets.add(
             Padding(
               padding: const EdgeInsets.only(top: 8.0),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(LucideIcons.file, color: Colors.blue),
-                  const SizedBox(width: 8),
-                  Text(file, style: const TextStyle(color: Colors.blue)),
-                ],
-              ),
+              child: _buildFileCard(fileUrl, file, 'file', isSystem),
             ),
           );
         }
@@ -2807,7 +2927,8 @@ class _ChatScreenState extends State<ChatScreen> {
       );
     }
 
-    if (!isUser && !isSystem) {
+    // System messages have their own avatar (mascot)
+    if (isSystem) {
       return Padding(
         padding: EdgeInsets.only(
           left: 12,
@@ -2824,7 +2945,50 @@ class _ChatScreenState extends State<ChatScreen> {
                 height: 28,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: const Color(0xFF1A1A1A),
+                  color: const Color(0xFF27272A),
+                ),
+                child: const ClipOval(
+                  child: Center(
+                    child: Icon(
+                      LucideIcons.bot,
+                      size: 16,
+                      color: Color(0xFF10B981),
+                    ),
+                  ),
+                ),
+              )
+            else
+              const SizedBox(width: 28),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: bubbleContent,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (!isUser) {
+      return Padding(
+        padding: EdgeInsets.only(
+          left: 12,
+          right: 60,
+          top: isFirst ? 8 : 2,
+          bottom: 2,
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            if (isFirst)
+              Container(
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xFFE4E4E7),
                 ),
                 child: ClipOval(
                   child: avatarUrl != null
@@ -2838,13 +3002,19 @@ class _ChatScreenState extends State<ChatScreen> {
                           },
                           errorBuilder: (context, error, stackTrace) => Text(
                             widget.agent.name[0],
-                            style: const TextStyle(fontSize: 10),
+                            style: const TextStyle(
+                              fontSize: 10,
+                              color: Colors.black,
+                            ),
                           ),
                         )
                       : Center(
                           child: Text(
                             widget.agent.name[0],
-                            style: const TextStyle(fontSize: 10),
+                            style: const TextStyle(
+                              fontSize: 10,
+                              color: Colors.black,
+                            ),
                           ),
                         ),
                 ),
@@ -2865,15 +3035,12 @@ class _ChatScreenState extends State<ChatScreen> {
 
     return Padding(
       padding: EdgeInsets.only(
-        left: isUser ? 60 : 12,
-        right: isUser ? 12 : 60,
+        left: 60,
+        right: 12,
         top: isFirst ? 8 : 2,
         bottom: 2,
       ),
-      child: Align(
-        alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-        child: bubbleContent,
-      ),
+      child: Align(alignment: Alignment.centerRight, child: bubbleContent),
     );
   }
 
