@@ -7,6 +7,8 @@ import 'package:lucide_icons/lucide_icons.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:video_player/video_player.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:file_picker/file_picker.dart';
 import 'api_service.dart';
 
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
@@ -240,6 +242,9 @@ class Agent {
   final String status;
   final String model;
   final String? profilePic;
+  final String platform;
+  final String containerId;
+  final String personality;
 
   Agent({
     required this.id,
@@ -248,6 +253,9 @@ class Agent {
     required this.status,
     required this.model,
     this.profilePic,
+    required this.platform,
+    required this.containerId,
+    required this.personality,
   });
 
   factory Agent.fromJson(Map<String, dynamic> json) {
@@ -258,6 +266,9 @@ class Agent {
       status: json['status']?.toString() ?? 'standby',
       model: json['model']?.toString() ?? 'unknown',
       profilePic: json['profilePic']?.toString(),
+      platform: json['platform']?.toString() ?? 'hermitchat',
+      containerId: json['container_id']?.toString() ?? '',
+      personality: json['personality']?.toString() ?? '',
     );
   }
 }
@@ -285,6 +296,9 @@ final List<Agent> mockAgents = [
     role: 'code assistant',
     status: 'running',
     model: 'openai/gpt-4o',
+    platform: 'hermitchat',
+    containerId: '123',
+    personality: 'helpful',
   ),
   Agent(
     id: '2',
@@ -292,6 +306,9 @@ final List<Agent> mockAgents = [
     role: 'data analyst',
     status: 'standby',
     model: 'anthropic/claude-3.5',
+    platform: 'hermitchat',
+    containerId: '456',
+    personality: 'analytical',
   ),
   Agent(
     id: '3',
@@ -299,6 +316,9 @@ final List<Agent> mockAgents = [
     role: 'orchestrator',
     status: 'running',
     model: 'internal',
+    platform: 'hermitchat',
+    containerId: '789',
+    personality: 'neutral',
   ),
 ];
 
@@ -607,7 +627,7 @@ class _MainLayoutState extends State<MainLayout> {
   }
 
   late final List<Widget> _screens = [
-    const AgentsScreen(),
+    const AgentsMainScreen(),
     const DashboardScreen(),
     const AppsScreen(),
     const CalendarScreen(),
@@ -617,6 +637,7 @@ class _MainLayoutState extends State<MainLayout> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.black,
       body: SafeArea(
         child: Center(
           child: ConstrainedBox(
@@ -660,20 +681,33 @@ class _MainLayoutState extends State<MainLayout> {
           ],
         ),
       ),
+      floatingActionButton: _currentIndex == 0
+          ? FloatingActionButton(
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const CreateAgentScreen()),
+              ).then((_) => setState(() {})),
+              backgroundColor: Colors.white,
+              child: const Icon(LucideIcons.plus, color: Colors.black),
+            )
+          : null,
     );
   }
 }
 
-class AgentsScreen extends StatefulWidget {
-  const AgentsScreen({super.key});
+class AgentsMainScreen extends StatefulWidget {
+  const AgentsMainScreen({super.key});
 
   @override
-  State<AgentsScreen> createState() => _AgentsScreenState();
+  State<AgentsMainScreen> createState() => _AgentsMainScreenState();
 }
 
-class _AgentsScreenState extends State<AgentsScreen> {
+class _AgentsMainScreenState extends State<AgentsMainScreen> {
   List<Agent> _agents = [];
+  List<Agent> _filteredAgents = [];
   bool _isLoading = true;
+  bool _isSearching = false;
+  final TextEditingController _searchController = TextEditingController();
 
   @override
   void initState() {
@@ -681,11 +715,30 @@ class _AgentsScreenState extends State<AgentsScreen> {
     _loadAgents();
   }
 
+  void _onSearchChanged(String query) {
+    setState(() {
+      _filteredAgents = _agents
+          .where((a) => a.name.toLowerCase().contains(query.toLowerCase()))
+          .toList();
+    });
+  }
+
+  void _toggleSearch() {
+    setState(() {
+      _isSearching = !_isSearching;
+      if (!_isSearching) {
+        _searchController.clear();
+        _filteredAgents = _agents;
+      }
+    });
+  }
+
   Future<void> _loadAgents() async {
     final data = await ApiService().getAgents();
     if (mounted) {
       setState(() {
         _agents = data.map((json) => Agent.fromJson(json)).toList();
+        _filteredAgents = _agents;
         _isLoading = false;
       });
     }
@@ -698,64 +751,49 @@ class _AgentsScreenState extends State<AgentsScreen> {
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 24, 16, 0),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              const Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'chats',
-                    style: TextStyle(fontSize: 28, fontWeight: FontWeight.w900),
-                  ),
-                  SizedBox(height: 4),
-                  Row(
-                    children: [
-                      HermitMascot(size: 16, showGlow: false),
-                      SizedBox(width: 6),
-                      Text(
-                        'connected',
-                        style: TextStyle(
-                          color: Color(0xFF10B981),
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF09090B),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: const Color(0xFF27272A)),
-                ),
-                child: const Icon(LucideIcons.search, size: 20),
-              ),
-            ],
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 300),
+            child: _isSearching ? _buildSearchBar() : _buildHeaderTitle(),
           ),
         ),
         const SizedBox(height: 16),
         Expanded(
           child: _isLoading 
             ? const Center(child: CircularProgressIndicator(color: Colors.white))
-            : ListView.builder(
+            : _filteredAgents.isEmpty
+              ? Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        _isSearching ? LucideIcons.searchX : LucideIcons.messageSquare, 
+                        size: 48, 
+                        color: Colors.grey
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        _isSearching ? 'no agents found for "${_searchController.text}"' : 'no agents created yet',
+                        style: const TextStyle(color: Colors.grey, fontSize: 16),
+                      ),
+                    ],
+                  ),
+                )
+              : ListView.builder(
             padding: EdgeInsets.zero,
-            itemCount: _agents.length,
+            itemCount: _filteredAgents.length,
             itemBuilder: (context, index) {
-              final agent = _agents[index];
+              final agent = _filteredAgents[index];
               final isRunning = agent.status == 'running';
+              final isTelegram = agent.platform == 'telegram';
               final lastMsg = ChatMessage(
                 role: 'system', 
-                content: 'Active connection to OS', 
+                content: isTelegram ? 'Limited: Telegram Mode' : 'Active connection to OS', 
                 timestamp: DateTime.now(), 
                 isRead: true
               );
 
               return GestureDetector(
-                onTap: () => Navigator.push(
+                onTap: isTelegram ? null : () => Navigator.push(
                   context,
                   MaterialPageRoute(builder: (_) => ChatScreen(agent: agent)),
                 ),
@@ -769,125 +807,111 @@ class _AgentsScreenState extends State<AgentsScreen> {
                       bottom: BorderSide(color: Color(0xFF1A1A1A), width: 0.5),
                     ),
                   ),
-                  child: Row(
-                    children: [
-                      Stack(
-                        children: [
-                          Container(
-                            width: 52,
-                            height: 52,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF09090B),
-                              borderRadius: BorderRadius.circular(26),
-                              border: Border.all(
-                                color: const Color(0xFF27272A),
-                              ),
-                            ),
-                            alignment: Alignment.center,
-                            child: Text(
-                              agent.name[0],
-                              style: const TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                          if (isRunning)
-                            Positioned(
-                              right: 0,
-                              bottom: 0,
-                              child: Container(
-                                width: 14,
-                                height: 14,
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF10B981),
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                    color: Colors.black,
-                                    width: 2,
-                                  ),
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                      const SizedBox(width: 14),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                  child: Opacity(
+                    opacity: isTelegram ? 0.6 : 1.0,
+                    child: Row(
+                      children: [
+                        Stack(
                           children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text(
-                                  agent.name,
-                                  style: const TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w600,
-                                  ),
+                            Container(
+                              width: 52,
+                              height: 52,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF09090B),
+                                borderRadius: BorderRadius.circular(26),
+                                border: Border.all(
+                                  color: const Color(0xFF27272A),
                                 ),
-                                Text(
-                                  '12:${30 + index} PM',
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    color: Color(0xFF71717A),
+                              ),
+                              alignment: Alignment.center,
+                              child: agent.profilePic != null && agent.profilePic!.isNotEmpty
+                                ? ClipRRect(
+                                    borderRadius: BorderRadius.circular(26),
+                                    child: Image.network(
+                                      '${ApiService().baseUrl}${agent.profilePic}',
+                                      fit: BoxFit.cover,
+                                      width: 52,
+                                      height: 52,
+                                      errorBuilder: (context, error, stackTrace) => Text(agent.name[0]),
+                                    ),
+                                  )
+                                : Text(
+                                    agent.name[0],
+                                    style: const TextStyle(
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.bold,
+                                    ),
                                   ),
-                                ),
-                              ],
                             ),
-                            const SizedBox(height: 2),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    lastMsg.content.length > 40
-                                        ? '${lastMsg.content.substring(0, 40)}...'
-                                        : lastMsg.content,
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      color: lastMsg.isRead
-                                          ? const Color(0xFF71717A)
-                                          : Colors.white,
+                            if (isRunning)
+                              Positioned(
+                                right: 0,
+                                bottom: 0,
+                                child: Container(
+                                  width: 14,
+                                  height: 14,
+                                  decoration: BoxDecoration(
+                                    color: isTelegram ? Colors.blueAccent : const Color(0xFF10B981),
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color: Colors.black,
+                                      width: 2,
                                     ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
                                   ),
                                 ),
-                                if (!lastMsg.isRead)
-                                  Container(
-                                    margin: const EdgeInsets.only(left: 8),
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 6,
-                                      vertical: 2,
+                              ),
+                          ],
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text(
+                                    agent.name + (isTelegram ? " (Bot)" : ""),
+                                    style: const TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
                                     ),
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFF10B981),
-                                      borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  const Text(
+                                    'just now',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Color(0xFF71717A),
                                     ),
-                                    child: const Text(
-                                      'new',
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 2),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      isTelegram ? 'Managed via Telegram' : lastMsg.content,
                                       style: TextStyle(
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.black,
+                                        fontSize: 14,
+                                        color: isTelegram ? Colors.blueGrey : const Color(0xFF71717A),
                                       ),
                                     ),
                                   ),
-                              ],
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              agent.model,
-                              style: const TextStyle(
-                                fontSize: 11,
-                                color: Color(0xFF52525B),
-                                fontFamily: 'monospace',
+                                ],
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
-                      ),
-                    ],
+                        IconButton(
+                          icon: const Icon(LucideIcons.settings, size: 20, color: Color(0xFF71717A)),
+                          onPressed: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(builder: (_) => CreateAgentScreen(existingAgent: agent)),
+                          ).then((_) => _loadAgents()),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               );
@@ -895,6 +919,88 @@ class _AgentsScreenState extends State<AgentsScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildHeaderTitle() {
+    return Row(
+      key: const ValueKey('header_title'),
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        const Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'chats',
+              style: TextStyle(fontSize: 28, fontWeight: FontWeight.w900),
+            ),
+            SizedBox(height: 4),
+            Row(
+              children: [
+                HermitMascot(size: 16, showGlow: false),
+                SizedBox(width: 6),
+                Text(
+                  'connected',
+                  style: TextStyle(
+                    color: Color(0xFF10B981),
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+        GestureDetector(
+          onTap: _toggleSearch,
+          child: Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: const Color(0xFF09090B),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFF27272A)),
+            ),
+            child: const Icon(LucideIcons.search, size: 20),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSearchBar() {
+    return Container(
+      key: const ValueKey('search_bar'),
+      height: 56,
+      decoration: BoxDecoration(
+        color: const Color(0xFF09090B),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFF27272A)),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: Row(
+        children: [
+          const Icon(LucideIcons.search, size: 20, color: Color(0xFF71717A)),
+          const SizedBox(width: 12),
+          Expanded(
+            child: TextField(
+              controller: _searchController,
+              autofocus: true,
+              onChanged: _onSearchChanged,
+              cursorColor: Colors.white,
+              style: const TextStyle(fontSize: 16),
+              decoration: const InputDecoration(
+                hintText: 'Search agents...',
+                hintStyle: TextStyle(color: Color(0xFF71717A)),
+                border: InputBorder.none,
+              ),
+            ),
+          ),
+          IconButton(
+            icon: const Icon(LucideIcons.x, size: 20, color: Color(0xFF71717A)),
+            onPressed: _toggleSearch,
+          ),
+        ],
+      ),
     );
   }
 }
@@ -948,7 +1054,6 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _loadMessages() async {
     // We could fetch actual history here if we had an endpoint for it in ApiService
     // For now, it's enough to clear and wait for new ones or we can mock it
-    setState(() => _isLoading = false);
   }
 
   Future<void> _showNotification(String body) async {
@@ -1044,6 +1149,38 @@ class _ChatScreenState extends State<ChatScreen> {
     return '${hour == 0 ? 12 : hour}:${time.minute.toString().padLeft(2, '0')} $period';
   }
 
+  Future<void> _pickAndUploadFile() async {
+    FilePickerResult? result = await FilePicker.platform.pickFiles();
+    if (result != null) {
+      final xfile = result.files.single.xFile;
+      
+      setState(() => _isSending = true);
+      
+      final containerId = widget.agent.containerId.isEmpty 
+          ? "agent-${widget.agent.name.toLowerCase()}" 
+          : widget.agent.containerId;
+      
+      bool success = await ApiService().uploadFileToContainer(containerId, xfile);
+
+      if (!mounted) return;
+      setState(() => _isSending = false);
+      
+      if (success) {
+        setState(() {
+          _messages.add(ChatMessage(
+            role: 'system',
+            content: 'File uploaded to workspace/in: ${result.files.single.name}',
+            timestamp: DateTime.now(),
+            isRead: true,
+          ));
+        });
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('File upload failed')));
+      }
+    }
+  }
+
+  // Deleted duplicate _buildInputArea
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1369,8 +1506,12 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
             const SizedBox(height: 6),
             Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
+                IconButton(
+                  icon: const Icon(LucideIcons.paperclip, size: 20, color: Color(0xFF52525B)),
+                  onPressed: _isSending ? null : _pickAndUploadFile,
+                ),
                 Expanded(
                   child: Container(
                     constraints: const BoxConstraints(maxHeight: 150),
@@ -1439,11 +1580,31 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   Map<String, dynamic>? _metrics;
   bool _isLoading = true;
+  StreamSubscription? _healthSubscription;
 
   @override
   void initState() {
     super.initState();
     _loadMetrics();
+    _healthSubscription = ApiService().healthStream.listen((data) {
+      if (mounted) {
+        setState(() {
+          _metrics = data;
+        });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _healthSubscription?.cancel();
+    super.dispose();
+  }
+
+  Color _getUsageColor(double value) {
+    if (value < 50) return const Color(0xFF10B981);
+    if (value < 80) return const Color(0xFFF59E0B);
+    return const Color(0xFFEF4444);
   }
 
   Future<void> _loadMetrics() async {
@@ -1488,7 +1649,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       cpuStr,
                       '%',
                       LucideIcons.cpu,
-                      Colors.white,
+                      _getUsageColor(cpuVal.toDouble()),
                     ),
                   ),
                   const SizedBox(width: 16),
@@ -1498,7 +1659,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       memStr,
                       'gb',
                       LucideIcons.memoryStick,
-                      Colors.white,
+                      _getUsageColor((memVal.toDouble() / 16000.0) * 100), // Assuming 16GB total for color scaling
                     ),
                   ),
                 ],
@@ -1521,15 +1682,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 child: ListView.builder(
                   itemCount: containers.length,
                   itemBuilder: (context, index) {
-                    final c = containers[index];
-                    final name = c['name']?.toString() ?? 'unknown';
-                    final cCpu = c['cpu'] ?? 0.0;
-                    final cMem = c['memory'] ?? 0.0;
-                    
-                    final cCpuStr = (cCpu is num) ? cCpu.toStringAsFixed(1) + '%' : '0.0%';
-                    final cMemStr = (cMem is num) ? cMem.toStringAsFixed(0) + ' MB' : '0 MB';
-                    
-                    return _buildContainerRow(name, cCpuStr, cMemStr);
+                    final container = containers[index];
+                    final name = container['name'] ?? 'Unknown';
+                    final cCpu = container['cpuPercent'] ?? 0.0;
+                    final cMem = container['memUsageMB'] ?? 0.0;
+
+                    final cCpuStr = (cCpu is num) ? cCpu.toStringAsFixed(1) : '0.0';
+                    final cMemStr = (cMem is num) ? (cMem / 1024).toStringAsFixed(1) : '0.0'; // Assuming cMem is in MB, convert to GB.
+
+                    return _buildContainerRow(
+                      name, 
+                      cCpuStr, 
+                      cMemStr,
+                      _getUsageColor(cCpu.toDouble()),
+                    );
                   },
                 ),
               ),
@@ -1595,39 +1761,303 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _buildContainerRow(String name, String cpu, String ram) {
+  Widget _buildContainerRow(String name, String cpu, String ram, Color color) {
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.black,
-        borderRadius: BorderRadius.circular(20),
+        color: const Color(0xFF09090B),
+        borderRadius: BorderRadius.circular(24),
         border: Border.all(color: const Color(0xFF27272A)),
       ),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Row(
-            children: [
-              const Icon(LucideIcons.box, size: 16, color: Colors.grey),
-              const SizedBox(width: 12),
-              Text(name, style: const TextStyle(fontWeight: FontWeight.bold)),
-            ],
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(LucideIcons.box, size: 16, color: color),
           ),
-          Row(
-            children: [
-              Text(
-                'cpu $cpu',
-                style: const TextStyle(color: Colors.grey, fontSize: 12),
-              ),
-              const SizedBox(width: 16),
-              Text(
-                'mem $ram',
-                style: const TextStyle(color: Colors.grey, fontSize: 12),
-              ),
-            ],
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name,
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Text(
+                      'cpu $cpu',
+                      style: const TextStyle(color: Colors.grey, fontSize: 12),
+                    ),
+                    const SizedBox(width: 16),
+                    Text(
+                      'mem $ram',
+                      style: const TextStyle(color: Colors.grey, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
+          Icon(LucideIcons.activity, size: 16, color: color),
         ],
+      ),
+    );
+  }
+}
+
+class CreateAgentScreen extends StatefulWidget {
+  final Agent? existingAgent;
+  const CreateAgentScreen({super.key, this.existingAgent});
+
+  @override
+  State<CreateAgentScreen> createState() => _CreateAgentScreenState();
+}
+
+class _CreateAgentScreenState extends State<CreateAgentScreen> {
+  late TextEditingController _nameCtrl;
+  late TextEditingController _roleCtrl;
+  late TextEditingController _personalityCtrl;
+  late TextEditingController _modelCtrl;
+  late TextEditingController _tokenCtrl;
+  String _provider = 'openrouter';
+  String _platform = 'hermitchat';
+  String? _profilePicUrl;
+  String? _bannerUrl;
+  bool _isDeploying = false;
+  final ImagePicker _picker = ImagePicker();
+
+  @override
+  void initState() {
+    super.initState();
+    _nameCtrl = TextEditingController(text: widget.existingAgent?.name ?? '');
+    _roleCtrl = TextEditingController(text: widget.existingAgent?.role ?? '');
+    _personalityCtrl = TextEditingController(text: widget.existingAgent?.personality ?? '');
+    _modelCtrl = TextEditingController(text: widget.existingAgent?.model ?? '');
+    _tokenCtrl = TextEditingController(); // Token usually not returned for security
+    _provider = 'openrouter';
+    _platform = widget.existingAgent?.platform ?? 'hermitchat';
+    _profilePicUrl = widget.existingAgent?.profilePic;
+  }
+
+  Future<void> _pickImage(bool isProfile) async {
+    final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
+    if (image != null) {
+      final url = await ApiService().uploadImage(image);
+      if (url != null) {
+        setState(() {
+          if (isProfile) {
+            _profilePicUrl = url;
+          } else {
+            _bannerUrl = url;
+          }
+        });
+      }
+    }
+  }
+
+  void _handleDeploy() async {
+    if (_nameCtrl.text.isEmpty || _roleCtrl.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Name and Role are required')),
+      );
+      return;
+    }
+
+    setState(() => _isDeploying = true);
+    
+    final payload = {
+      'name': _nameCtrl.text.trim(),
+      'role': _roleCtrl.text.trim(),
+      'personality': _personalityCtrl.text.trim(),
+      'provider': _provider,
+      'model': _modelCtrl.text.trim(),
+      'platform': _platform,
+      'profilePic': _profilePicUrl ?? '',
+      'bannerUrl': _bannerUrl ?? '',
+    };
+
+    if (_platform == 'telegram') {
+      payload['telegramToken'] = _tokenCtrl.text.trim();
+    }
+
+    bool success = false;
+    if (widget.existingAgent != null) {
+      success = await ApiService().updateAgent(widget.existingAgent!.id, payload);
+    } else {
+      final result = await ApiService().createAgent(payload);
+      success = result != null && result['success'] == true;
+    }
+    
+    if (!mounted) return;
+    setState(() => _isDeploying = false);
+
+    if (success) {
+      Navigator.pop(context);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Deployment/Update failed')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        title: Text(widget.existingAgent != null ? 'configure agent' : 'new deployment', 
+          style: const TextStyle(fontWeight: FontWeight.w900, color: Colors.white)),
+        leading: IconButton(
+          icon: const Icon(LucideIcons.arrowLeft, color: Colors.white),
+          onPressed: () => Navigator.pop(context),
+        ),
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: GestureDetector(
+                onTap: () => _pickImage(true),
+                child: CircleAvatar(
+                  radius: 50,
+                  backgroundColor: const Color(0xFF1A1A1A),
+                  backgroundImage: _profilePicUrl != null 
+                    ? NetworkImage('${ApiService().baseUrl}$_profilePicUrl') 
+                    : null,
+                  child: _profilePicUrl == null 
+                    ? const Icon(LucideIcons.camera, color: Colors.white) 
+                    : null,
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Center(child: Text('tap to change profile pic', style: TextStyle(color: Colors.grey, fontSize: 12))),
+            
+            _buildSectionTitle('identity'),
+            _buildTextField(_nameCtrl, 'Agent Name', 'e.g. Ralph'),
+            _buildTextField(_roleCtrl, 'Role', 'e.g. Code Assistant'),
+            _buildTextField(_personalityCtrl, 'Personality', 'e.g. Concise and helpful'),
+            
+            _buildSectionTitle('provider'),
+            _buildChoiceChip('openrouter', 'OpenRouter (Free)'),
+            _buildChoiceChip('openai', 'OpenAI'),
+            _buildChoiceChip('anthropic', 'Anthropic'),
+            _buildChoiceChip('gemini', 'Google Gemini'),
+            _buildTextField(_modelCtrl, 'Specific Model', 'e.g. gemini-2.0-flash-exp'),
+            
+            _buildSectionTitle('platform'),
+            Row(
+              children: [
+                Expanded(child: _buildPlatformChip('hermitchat', 'HermitChat', LucideIcons.messageSquare)),
+                const SizedBox(width: 12),
+                Expanded(child: _buildPlatformChip('telegram', 'Telegram', LucideIcons.send)),
+              ],
+            ),
+            
+            if (_platform == 'telegram') ...[
+              const SizedBox(height: 16),
+              _buildTextField(_tokenCtrl, 'Bot Token', '123456:BC...'),
+            ],
+            
+            const SizedBox(height: 48),
+            SizedBox(
+              width: double.infinity,
+              height: 56,
+              child: ElevatedButton(
+                onPressed: _isDeploying ? null : _handleDeploy,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.white,
+                  foregroundColor: Colors.black,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+                ),
+                child: _isDeploying 
+                  ? const CircularProgressIndicator(color: Colors.black)
+                  : Text(widget.existingAgent != null ? 'save changes' : 'deploy agent', 
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSectionTitle(String title) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 24, bottom: 12),
+      child: Text(
+        title.toLowerCase(),
+        style: const TextStyle(color: Colors.grey, fontWeight: FontWeight.bold, fontSize: 14, letterSpacing: 1.2),
+      ),
+    );
+  }
+
+  Widget _buildTextField(TextEditingController ctrl, String label, String hint) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: TextField(
+        controller: ctrl,
+        decoration: InputDecoration(
+          labelText: label,
+          hintText: hint,
+          labelStyle: const TextStyle(color: Colors.grey),
+          hintStyle: const TextStyle(color: Color(0xFF27272A)),
+          filled: true,
+          fillColor: const Color(0xFF09090B),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: Color(0xFF27272A))),
+          enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: Color(0xFF27272A))),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildChoiceChip(String val, String label) {
+    final isSelected = _provider == val;
+    return GestureDetector(
+      onTap: () => setState(() => _provider = val),
+      child: Container(
+        width: double.infinity,
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        decoration: BoxDecoration(
+          color: isSelected ? Colors.white : const Color(0xFF09090B),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: isSelected ? Colors.white : const Color(0xFF27272A)),
+        ),
+        child: Text(label, style: TextStyle(color: isSelected ? Colors.black : Colors.white, fontWeight: isSelected ? FontWeight.bold : FontWeight.normal)),
+      ),
+    );
+  }
+
+  Widget _buildPlatformChip(String val, String label, IconData icon) {
+    final isSelected = _platform == val;
+    return GestureDetector(
+      onTap: () => setState(() => _platform = val),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 20),
+        decoration: BoxDecoration(
+          color: isSelected ? Colors.white : const Color(0xFF09090B),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: isSelected ? Colors.white : const Color(0xFF27272A)),
+        ),
+        child: Column(
+          children: [
+            Icon(icon, color: isSelected ? Colors.black : Colors.white),
+            const SizedBox(height: 8),
+            Text(label, style: TextStyle(color: isSelected ? Colors.black : Colors.white, fontWeight: isSelected ? FontWeight.bold : FontWeight.normal)),
+          ],
+        ),
       ),
     );
   }
@@ -1645,37 +2075,107 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _tunnelEnabled = true;
   String _tunnelUrl = '';
   bool _isLoading = true;
+  bool _isSaving = false;
+  bool _isSavingKeys = false;
   String _timeOffset = '0';
+  String _pendingOffset = '0';
+  DateTime? _serverTime;
+  DateTime? _serverUtcTime;
+  Timer? _timeTimer;
+
+  final TextEditingController _openrouterController = TextEditingController();
+  final TextEditingController _openaiController = TextEditingController();
+  final TextEditingController _anthropicController = TextEditingController();
+  final TextEditingController _geminiController = TextEditingController();
+  final TextEditingController _usernameController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     _loadSettings();
+    _syncTime();
+  }
+
+  @override
+  void dispose() {
+    _timeTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _syncTime() async {
+    final data = await ApiService().getServerTime();
+    if (data != null && mounted) {
+      setState(() {
+        try {
+          final rawUtcStr = (data['serverUtcTime'] ?? data['datetime'] ?? data['time']).toString();
+          _serverUtcTime = DateTime.parse(rawUtcStr);
+          _timeOffset = data['offset']?.toString() ?? '0';
+          _pendingOffset = _timeOffset;
+          _updateDisplayedTimes();
+          _startTimeTicker();
+        } catch (e) {
+          debugPrint('Error parsing server time: $e');
+          _serverUtcTime = DateTime.now().toUtc();
+          _updateDisplayedTimes();
+        }
+      });
+    } else if (mounted) {
+      setState(() {
+        _serverUtcTime ??= DateTime.now().toUtc();
+        _updateDisplayedTimes();
+      });
+    }
+  }
+
+  void _updateDisplayedTimes() {
+    if (_serverUtcTime == null) return;
+    final offset = int.tryParse(_timeOffset) ?? 0;
+    // System time is raw server UTC + the user's defined offset
+    _serverTime = _serverUtcTime!.toUtc().add(Duration(hours: offset));
+  }
+
+  void _startTimeTicker() {
+    _timeTimer?.cancel();
+    _timeTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (mounted && _serverUtcTime != null) {
+        setState(() {
+          _serverUtcTime = _serverUtcTime!.add(const Duration(seconds: 1));
+          _updateDisplayedTimes();
+        });
+      }
+    });
   }
 
   Future<void> _loadSettings() async {
     final api = ApiService();
-    final settings = await api.getSettings();
-    if (settings != null && mounted) {
-      setState(() {
-        _tunnelEnabled = settings['tunnelEnabled'] == true || settings['tunnelEnabled'] == 'true';
-        _tunnelUrl = settings['tunnelURL'] ?? '';
-        _isLoading = false;
-      });
-    } else if (mounted) {
-      setState(() => _isLoading = false);
+    try {
+      final settings = await api.getSettings();
+      if (settings != null && mounted) {
+        setState(() {
+          _tunnelEnabled = settings['tunnelEnabled'] == true || settings['tunnelEnabled'] == 'true';
+          _tunnelUrl = settings['tunnelURL'] ?? '';
+          _timeOffset = settings['timeOffset']?.toString() ?? '0';
+          _openrouterController.text = settings['openrouterKey'] ?? '';
+          _openaiController.text = settings['openaiKey'] ?? '';
+          _anthropicController.text = settings['anthropicKey'] ?? '';
+          _geminiController.text = settings['geminiKey'] ?? '';
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
   final List<Map<String, String>> _timePresets = [
     {'label': 'UTC', 'value': '0', 'desc': 'London'},
-    {'label': '+8h', 'value': '8', 'desc': 'Philippines'},
+    {'label': '+8h', 'value': '8', 'desc': 'Manila'},
     {'label': '+9h', 'value': '9', 'desc': 'Tokyo'},
     {'label': '+1h', 'value': '1', 'desc': 'Paris'},
     {'label': '-5h', 'value': '-5', 'desc': 'New York'},
     {'label': '-8h', 'value': '-8', 'desc': 'Los Angeles'},
-    {'label': '+5h', 'value': '5', 'desc': 'Dubai'},
-    {'label': '+3h', 'value': '3', 'desc': 'Moscow'},
   ];
 
   @override
@@ -1693,18 +2193,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 24),
           Expanded(
             child: ListView(
-              padding: const EdgeInsets.only(bottom: 40),
+              padding: const EdgeInsets.only(bottom: 100),
               children: [
                 _buildPublicUrlSection(),
-                const SizedBox(height: 24),
-                _buildApiKeysSection(),
-                const SizedBox(height: 24),
+                const SizedBox(height: 16),
                 _buildTimeSettingsSection(),
-                const SizedBox(height: 24),
+                const SizedBox(height: 16),
+                _buildApiKeysSection(),
+                const SizedBox(height: 16),
                 _buildCredentialsSection(),
-                const SizedBox(height: 24),
-                _buildBackupRestoreSection(),
-                const SizedBox(height: 24),
+                const SizedBox(height: 16),
                 _buildSessionSection(),
               ],
             ),
@@ -1720,10 +2218,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     required Widget child,
   }) {
     return Container(
-      padding: const EdgeInsets.all(24),
+      padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: const Color(0xFF09090B),
-        borderRadius: BorderRadius.circular(32),
+        borderRadius: BorderRadius.circular(24),
         border: Border.all(color: const Color(0xFF27272A)),
       ),
       child: Column(
@@ -1731,18 +2229,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
         children: [
           Row(
             children: [
-              Icon(icon, size: 20, color: Colors.white),
-              const SizedBox(width: 12),
+              Icon(icon, size: 18, color: Colors.white),
+              const SizedBox(width: 10),
               Text(
                 title.toLowerCase(),
                 style: const TextStyle(
-                  fontSize: 20,
+                  fontSize: 18,
                   fontWeight: FontWeight.bold,
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 16),
           child,
         ],
       ),
@@ -1832,27 +2330,62 @@ class _SettingsScreenState extends State<SettingsScreen> {
             'OpenRouter API Key (Free Models)',
             'sk-or-...',
             obscure: true,
+            controller: _openrouterController,
           ),
           const SizedBox(height: 16),
-          _buildTextField('OpenAI API Key', 'sk-...', obscure: true),
+          _buildTextField(
+            'OpenAI API Key', 
+            'sk-...', 
+            obscure: true, 
+            controller: _openaiController
+          ),
           const SizedBox(height: 16),
-          _buildTextField('Anthropic API Key', 'sk-ant-...', obscure: true),
+          _buildTextField(
+            'Anthropic API Key', 
+            'sk-ant-...', 
+            obscure: true, 
+            controller: _anthropicController
+          ),
           const SizedBox(height: 16),
-          _buildTextField('Gemini API Key', 'AIza...', obscure: true),
+          _buildTextField(
+            'Gemini API Key', 
+            'AIza...', 
+            obscure: true, 
+            controller: _geminiController
+          ),
           const SizedBox(height: 24),
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(
-              onPressed: () {},
+              onPressed: _isLoading ? null : () async {
+                setState(() => _isSavingKeys = true);
+                final success = await ApiService().updateSettings({
+                  'openrouterKey': _openrouterController.text,
+                  'openaiKey': _openaiController.text,
+                  'anthropicKey': _anthropicController.text,
+                  'geminiKey': _geminiController.text,
+                });
+                if (mounted) {
+                  setState(() => _isSavingKeys = false);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(success ? 'API Keys updated' : 'Update failed')),
+                  );
+                }
+              },
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.white,
                 foregroundColor: Colors.black,
                 padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
               ),
-              child: const Text(
-                'Save Keys',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
+              child: _isSavingKeys 
+                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
+                : const Text(
+                    'Save Keys',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
             ),
           ),
         ],
@@ -1861,6 +2394,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _buildTimeSettingsSection() {
+    final now = _serverTime;
+    final preview = _serverUtcTime?.add(Duration(hours: int.tryParse(_pendingOffset) ?? 0));
+
+    String formatTime(DateTime? t) {
+      if (t == null) return "--:--:--";
+      final h = t.hour > 12 ? t.hour - 12 : (t.hour == 0 ? 12 : t.hour);
+      final ampm = t.hour >= 12 ? 'PM' : 'AM';
+      return "${h.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')} $ampm";
+    }
+    
     return _buildSectionCard(
       title: 'System Time',
       icon: LucideIcons.clock,
@@ -1870,87 +2413,95 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Row(
             children: [
               Expanded(
-                child: Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF10B981).withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: const Color(0xFF10B981).withValues(alpha: 0.3),
-                    ),
-                  ),
-                  child: const Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'YOUR LOCAL TIME',
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: Color(0xFF34D399),
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 1,
-                        ),
-                      ),
-                      SizedBox(height: 8),
-                      Text(
-                        '10:42 AM',
-                        style: TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
-                          fontFamily: 'monospace',
-                          color: Color(0xFF34D399),
-                        ),
-                      ),
-                    ],
-                  ),
+                child: _buildTimeCard(
+                  label: 'GLOBAL SYSTEM TIME',
+                  time: formatTime(now),
+                  color: const Color(0xFF10B981),
+                  isActive: true,
                 ),
               ),
               const SizedBox(width: 12),
               Expanded(
-                child: Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF3B82F6).withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: const Color(0xFF3B82F6).withValues(alpha: 0.3),
-                    ),
-                  ),
-                  child: const Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'PREVIEW (OFFSET)',
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: Color(0xFF93C5FD),
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 1,
-                        ),
-                      ),
-                      SizedBox(height: 8),
-                      Text(
-                        '10:42 AM',
-                        style: TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
-                          fontFamily: 'monospace',
-                          color: Color(0xFF93C5FD),
-                        ),
-                      ),
-                    ],
-                  ),
+                child: _buildTimeCard(
+                  label: 'PREVIEW (+${_pendingOffset}h)',
+                  time: formatTime(preview),
+                  color: const Color(0xFF3B82F6),
+                  isActive: _pendingOffset != _timeOffset,
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 16),
+          Padding(
+            padding: const EdgeInsets.only(left: 4),
+            child: Row(
+              children: [
+                const Icon(LucideIcons.globe, size: 12, color: Color(0xFF64748B)),
+                const SizedBox(width: 6),
+                Text(
+                  'SERVER OFFSET: UTC${int.parse(_timeOffset) >= 0 ? '+' : ''}${_timeOffset}h',
+                  style: const TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w900,
+                    color: Color(0xFF10B981),
+                    letterSpacing: 1.2,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          const Divider(color: Color(0xFF1E293B)),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'CUSTOM OFFSET',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: Color(0xFF71717A),
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.5,
+                ),
+              ),
+              Text(
+                '${int.tryParse(_pendingOffset) ?? 0}h',
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              activeTrackColor: const Color(0xFF3B82F6),
+              inactiveTrackColor: const Color(0xFF1E293B),
+              thumbColor: Colors.white,
+              overlayColor: const Color(0xFF3B82F6).withValues(alpha: 0.2),
+              trackHeight: 4.0,
+            ),
+            child: Slider(
+              value: (int.tryParse(_pendingOffset) ?? 0).toDouble(),
+              min: -12,
+              max: 14,
+              divisions: 26,
+              onChanged: (value) {
+                setState(() {
+                  _pendingOffset = value.toInt().toString();
+                });
+              },
+            ),
+          ),
+          const SizedBox(height: 12),
           const Text(
-            'SELECT YOUR TIMEZONE OFFSET FROM UTC',
+            'PRESETS',
             style: TextStyle(
-              fontSize: 10,
-              color: Colors.grey,
-              fontWeight: FontWeight.bold,
+              fontSize: 11,
+              color: Color(0xFF71717A),
+              fontWeight: FontWeight.w900,
               letterSpacing: 1,
             ),
           ),
@@ -1959,43 +2510,46 @@ class _SettingsScreenState extends State<SettingsScreen> {
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 2,
-              childAspectRatio: 2.5,
-              crossAxisSpacing: 12,
-              mainAxisSpacing: 12,
+              crossAxisCount: 3,
+              childAspectRatio: 1.8,
+              crossAxisSpacing: 8,
+              mainAxisSpacing: 8,
             ),
             itemCount: _timePresets.length,
             itemBuilder: (context, index) {
               final preset = _timePresets[index];
-              final isSelected = _timeOffset == preset['value'];
+              final isSelected = _pendingOffset == preset['value'];
+              final isCurrent = _timeOffset == preset['value'];
+              
               return GestureDetector(
-                onTap: () => setState(() => _timeOffset = preset['value']!),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 8,
-                  ),
+                onTap: () {
+                  setState(() => _pendingOffset = preset['value']!);
+                },
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
                   decoration: BoxDecoration(
-                    color: isSelected
-                        ? const Color(0xFF3B82F6)
-                        : const Color(0xFF27272A),
-                    borderRadius: BorderRadius.circular(16),
+                    color: isSelected ? const Color(0xFF3B82F6) : const Color(0xFF09090B),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: isSelected ? const Color(0xFF3B82F6) : (isCurrent ? const Color(0xFF10B981) : const Color(0xFF27272A)),
+                      width: isSelected || isCurrent ? 2 : 1,
+                    ),
                   ),
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
                         preset['label']!,
                         style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: isSelected ? Colors.white : Colors.white,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 14,
+                          color: isSelected ? Colors.white : Colors.white70,
                         ),
                       ),
                       Text(
                         preset['desc']!,
                         style: TextStyle(
-                          fontSize: 10,
+                          fontSize: 9,
                           color: isSelected ? Colors.white70 : Colors.grey,
                         ),
                       ),
@@ -2004,6 +2558,86 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               );
             },
+          ),
+          const SizedBox(height: 20),
+          if (_pendingOffset != _timeOffset)
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _isLoading || _isSaving ? null : () async {
+                  setState(() => _isSaving = true);
+                  final success = await ApiService().updateSettings({'timeOffset': _pendingOffset});
+                  if (success) {
+                    await _syncTime();
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('System time synchronized')),
+                      );
+                    }
+                  }
+                  if (mounted) setState(() => _isSaving = false);
+                },
+                icon: _isSaving 
+                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Icon(LucideIcons.save, size: 16),
+                label: const Text(
+                  'Save Sync',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF3B82F6),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTimeCard({
+    required String label,
+    required String time,
+    required Color color,
+    required bool isActive,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: isActive ? color.withValues(alpha: 0.1) : const Color(0xFF0F172A),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isActive ? color.withValues(alpha: 0.3) : const Color(0xFF1E293B),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 9,
+              color: isActive ? color : const Color(0xFF64748B),
+              fontWeight: FontWeight.bold,
+              letterSpacing: 1,
+            ),
+          ),
+          const SizedBox(height: 8),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              time,
+              style: TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w900,
+                fontFamily: 'monospace',
+                color: isActive ? color : Colors.white,
+              ),
+            ),
           ),
         ],
       ),
@@ -2016,18 +2650,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
       icon: LucideIcons.user,
       child: Column(
         children: [
-          _buildTextField('New Username', 'Enter new username', obscure: false),
+          _buildTextField(
+            'New Username', 
+            'Enter new username', 
+            obscure: false, 
+            controller: _usernameController
+          ),
           const SizedBox(height: 16),
-          _buildTextField('New Password', 'Enter new password', obscure: true),
+          _buildTextField(
+            'New Password', 
+            'Enter new password', 
+            obscure: true, 
+            controller: _passwordController
+          ),
           const SizedBox(height: 24),
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(
-              onPressed: () {},
+              onPressed: _isLoading ? null : () async {
+                // Implement creditial update logic if needed
+              },
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.white,
                 foregroundColor: Colors.black,
                 padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
               ),
               child: const Text(
                 'Update Credentials',
@@ -2040,106 +2689,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildBackupRestoreSection() {
-    return _buildSectionCard(
-      title: 'Backup & Restore',
-      icon: LucideIcons.archive,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Row(
-            children: [
-              Icon(LucideIcons.download, size: 16, color: Color(0xFF34D399)),
-              SizedBox(width: 8),
-              Text(
-                'Export Backup',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'Download all your data including database, images, skills, agent configurations, and logs as a .zip file.',
-            style: TextStyle(color: Colors.grey, fontSize: 12),
-          ),
-          const SizedBox(height: 16),
-          ElevatedButton.icon(
-            onPressed: () {},
-            icon: const Icon(LucideIcons.download, size: 16),
-            label: const Text(
-              'Download Backup',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF059669),
-              foregroundColor: Colors.white,
-            ),
-          ),
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 24),
-            child: Divider(color: Color(0xFF27272A)),
-          ),
-          const Row(
-            children: [
-              Icon(LucideIcons.upload, size: 16, color: Color(0xFFFBBF24)),
-              SizedBox(width: 8),
-              Text(
-                'Import Backup',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: const Color(0xFFF59E0B).withValues(alpha: 0.1),
-              border: Border.all(
-                color: const Color(0xFFF59E0B).withValues(alpha: 0.3),
-              ),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: const Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(
-                  LucideIcons.alertTriangle,
-                  size: 16,
-                  color: Color(0xFFFBBF24),
-                ),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Warning: Importing a backup will overwrite existing data. This action cannot be undone.',
-                    style: TextStyle(color: Color(0xFFFDE68A), fontSize: 12),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-          _buildTextField(
-            'Your Password (required for security)',
-            'Enter your password',
-            obscure: true,
-          ),
-          const SizedBox(height: 16),
-          ElevatedButton.icon(
-            onPressed: () {},
-            icon: const Icon(LucideIcons.upload, size: 16),
-            label: const Text(
-              'Import Backup',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFD97706),
-              foregroundColor: Colors.white,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+// Backup & Restore section removed for mobile optimization.
+// Use the Web Dashboard for full backups.
 
   Widget _buildSessionSection() {
     return _buildSectionCard(
@@ -2167,7 +2718,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildTextField(String label, String hint, {required bool obscure}) {
+  Widget _buildTextField(String label, String hint, {required bool obscure, TextEditingController? controller}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2178,23 +2729,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
             style: const TextStyle(
               fontSize: 10,
               fontWeight: FontWeight.bold,
-              color: Colors.grey,
-              letterSpacing: 1,
+              color: Color(0xFF52525B),
+              letterSpacing: 1.5,
             ),
           ),
         ),
         TextField(
+          controller: controller,
           obscureText: obscure,
           style: const TextStyle(fontSize: 14),
           decoration: InputDecoration(
             hintText: hint,
-            hintStyle: const TextStyle(color: Color(0xFF52525B)),
+            hintStyle: const TextStyle(color: Color(0xFF3F3F46)),
             filled: true,
             fillColor: Colors.black,
-            contentPadding: const EdgeInsets.symmetric(
-              horizontal: 20,
-              vertical: 16,
-            ),
+            contentPadding: const EdgeInsets.all(18),
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(16),
               borderSide: const BorderSide(color: Color(0xFF27272A)),
