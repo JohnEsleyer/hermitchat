@@ -2522,8 +2522,9 @@ class _ChatScreenState extends State<ChatScreen> {
     if (msg.files != null && msg.files!.isNotEmpty) {
       List<Widget> fileWidgets = [];
       for (final file in msg.files!) {
-        final containerId =
-            'agent-${widget.agent.name.toLowerCase().replaceAll(' ', '')}';
+        final containerId = widget.agent.containerId.isEmpty
+            ? 'agent-${widget.agent.name.toLowerCase()}'
+            : widget.agent.containerId;
         final fileUrl =
             '$baseUrl/api/containers/$containerId/download?file=$file';
         final ext = file.split('.').last.toLowerCase();

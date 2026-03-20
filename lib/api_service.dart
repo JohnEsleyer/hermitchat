@@ -17,6 +17,7 @@ class ApiService {
   String? baseUrl;
   String? token;
   WebSocketChannel? _channel;
+  bool _shouldReconnect = false;
   final _messageController = StreamController<Map<String, dynamic>>.broadcast();
   final _healthController = StreamController<Map<String, dynamic>>.broadcast();
 
@@ -67,13 +68,15 @@ class ApiService {
     baseUrl = prefs.getString('server_url');
     token = prefs.getString('auth_token');
     if (baseUrl != null) {
+      _shouldReconnect = true;
       _connectWebSocket();
     }
   }
 
   void _connectWebSocket() {
     if (baseUrl == null) return;
-    final wsUrl = baseUrl!.replaceFirst('http', 'ws') + '/api/ws';
+    _channel?.sink.close();
+    final wsUrl = '${baseUrl!.replaceFirst('http', 'ws')}/api/ws';
     _channel = WebSocketChannel.connect(Uri.parse(wsUrl));
     _channel!.stream.listen(
       (message) {
@@ -95,12 +98,22 @@ class ApiService {
         }
       },
       onDone: () {
-        Future.delayed(const Duration(seconds: 5), _connectWebSocket);
+        _channel = null;
+        if (_shouldReconnect && baseUrl != null) {
+          Future.delayed(const Duration(seconds: 5), () {
+            if (_shouldReconnect && _channel == null && baseUrl != null) {
+              _connectWebSocket();
+            }
+          });
+        }
       },
     );
   }
 
   Future<void> logout() async {
+    _shouldReconnect = false;
+    await _channel?.sink.close();
+    _channel = null;
     baseUrl = null;
     token = null;
     final prefs = await SharedPreferences.getInstance();
@@ -127,6 +140,9 @@ class ApiService {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         if (data['success'] == true) {
+          _shouldReconnect = false;
+          await _channel?.sink.close();
+          _channel = null;
           baseUrl = url;
           token = data['token']?.toString();
 
@@ -135,6 +151,8 @@ class ApiService {
           if (token != null) {
             await prefs.setString('auth_token', token!);
           }
+          _shouldReconnect = true;
+          _connectWebSocket();
           return true;
         }
       }
