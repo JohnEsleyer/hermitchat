@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -10,22 +11,62 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
 import 'api_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+    FlutterLocalNotificationsPlugin();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   if (!kIsWeb) {
-    const AndroidInitializationSettings initializationSettingsAndroid = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const InitializationSettings initializationSettings = InitializationSettings(
-      android: initializationSettingsAndroid,
+    const AndroidInitializationSettings initializationSettingsAndroid =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+    const InitializationSettings initializationSettings =
+        InitializationSettings(android: initializationSettingsAndroid);
+    await flutterLocalNotificationsPlugin.initialize(
+      settings: initializationSettings,
     );
-    await flutterLocalNotificationsPlugin.initialize(settings: initializationSettings);
   }
 
   await ApiService().init();
   runApp(const HermitChatApp());
+}
+
+class ChatBackgroundPreferences {
+  static const _prefix = 'chat_background_';
+
+  static Future<String> resolve(String agentId, String fallback) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('$_prefix$agentId') ?? fallback;
+  }
+
+  static Future<void> save(String agentId, String backgroundId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('$_prefix$agentId', backgroundId);
+  }
+
+  static Future<List<Agent>> applyToAgents(List<Agent> agents) async {
+    final prefs = await SharedPreferences.getInstance();
+    return agents
+        .map(
+          (agent) => Agent(
+            id: agent.id,
+            name: agent.name,
+            role: agent.role,
+            status: agent.status,
+            model: agent.model,
+            profilePic: agent.profilePic,
+            platform: agent.platform,
+            containerId: agent.containerId,
+            personality: agent.personality,
+            provider: agent.provider,
+            background:
+                prefs.getString('$_prefix${agent.id}') ?? agent.background,
+          ),
+        )
+        .toList();
+  }
 }
 
 class CalendarEventModel {
@@ -104,44 +145,70 @@ class _CalendarScreenState extends State<CalendarScreen> {
     return Scaffold(
       backgroundColor: Colors.transparent,
       appBar: AppBar(
-        title: const Text('calendar', style: TextStyle(fontWeight: FontWeight.w900)),
+        title: const Text(
+          'calendar',
+          style: TextStyle(fontWeight: FontWeight.w900),
+        ),
         backgroundColor: Colors.transparent,
         elevation: 0,
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : _events.isEmpty
-              ? const Center(child: Text('No upcoming events', style: TextStyle(color: Colors.grey)))
-              : ListView.builder(
-                  padding: const EdgeInsets.all(16),
-                  itemCount: _events.length,
-                  itemBuilder: (context, index) {
-                    final event = _events[index];
-                    return Card(
-                      color: const Color(0xFF09090B),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                        side: const BorderSide(color: Color(0xFF27272A)),
+          ? const Center(
+              child: Text(
+                'No upcoming events',
+                style: TextStyle(color: Colors.grey),
+              ),
+            )
+          : ListView.builder(
+              padding: const EdgeInsets.all(16),
+              itemCount: _events.length,
+              itemBuilder: (context, index) {
+                final event = _events[index];
+                return Card(
+                  color: const Color(0xFF09090B),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    side: const BorderSide(color: Color(0xFF27272A)),
+                  ),
+                  margin: const EdgeInsets.only(bottom: 12),
+                  child: ListTile(
+                    leading: CircleAvatar(
+                      backgroundColor: event.executed
+                          ? const Color(0xFF10B981).withValues(alpha: 0.2)
+                          : const Color(0xFF3F3F46),
+                      child: Icon(
+                        event.executed
+                            ? LucideIcons.check
+                            : LucideIcons.calendar,
+                        color: event.executed
+                            ? const Color(0xFF10B981)
+                            : Colors.white,
                       ),
-                      margin: const EdgeInsets.only(bottom: 12),
-                      child: ListTile(
-                        leading: CircleAvatar(
-                          backgroundColor: event.executed ? const Color(0xFF10B981).withValues(alpha: 0.2) : const Color(0xFF3F3F46),
-                          child: Icon(
-                            event.executed ? LucideIcons.check : LucideIcons.calendar,
-                            color: event.executed ? const Color(0xFF10B981) : Colors.white,
-                          ),
-                        ),
-                        title: Text(event.prompt, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                        subtitle: Text('${event.date} at ${event.time} • Agent: ${event.agent}', style: const TextStyle(color: Colors.grey)),
-                        trailing: IconButton(
-                          icon: const Icon(LucideIcons.trash2, color: Colors.redAccent),
-                          onPressed: () => _deleteEvent(event.id),
-                        ),
+                    ),
+                    title: Text(
+                      event.prompt,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
                       ),
-                    );
-                  },
-                ),
+                    ),
+                    subtitle: Text(
+                      '${event.date} at ${event.time} • Agent: ${event.agent}',
+                      style: const TextStyle(color: Colors.grey),
+                    ),
+                    trailing: IconButton(
+                      icon: const Icon(
+                        LucideIcons.trash2,
+                        color: Colors.redAccent,
+                      ),
+                      onPressed: () => _deleteEvent(event.id),
+                    ),
+                  ),
+                );
+              },
+            ),
     );
   }
 }
@@ -161,12 +228,14 @@ class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
   @override
   void initState() {
     super.initState();
-    _controller = VideoPlayerController.networkUrl(
-      Uri.parse(widget.url),
-      httpHeaders: {'Authorization': 'Bearer ${widget.token}'},
-    )..initialize().then((_) {
-        setState(() {});
-      });
+    _controller =
+        VideoPlayerController.networkUrl(
+            Uri.parse(widget.url),
+            httpHeaders: {'Authorization': 'Bearer ${widget.token}'},
+          )
+          ..initialize().then((_) {
+            setState(() {});
+          });
   }
 
   @override
@@ -183,17 +252,25 @@ class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
         alignment: Alignment.bottomCenter,
         children: [
           VideoPlayer(_controller),
-          VideoProgressIndicator(_controller, allowScrubbing: true, colors: const VideoProgressColors(playedColor: Colors.red)),
+          VideoProgressIndicator(
+            _controller,
+            allowScrubbing: true,
+            colors: const VideoProgressColors(playedColor: Colors.red),
+          ),
           Center(
             child: IconButton(
               icon: Icon(
-                _controller.value.isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled,
+                _controller.value.isPlaying
+                    ? Icons.pause_circle_filled
+                    : Icons.play_circle_filled,
                 color: Colors.white.withValues(alpha: 0.8),
                 size: 50,
               ),
               onPressed: () {
                 setState(() {
-                  _controller.value.isPlaying ? _controller.pause() : _controller.play();
+                  _controller.value.isPlaying
+                      ? _controller.pause()
+                      : _controller.play();
                 });
               },
             ),
@@ -245,6 +322,8 @@ class Agent {
   final String platform;
   final String containerId;
   final String personality;
+  final String provider;
+  final String background;
 
   Agent({
     required this.id,
@@ -256,6 +335,8 @@ class Agent {
     required this.platform,
     required this.containerId,
     required this.personality,
+    this.provider = 'openrouter',
+    this.background = 'doodle',
   });
 
   factory Agent.fromJson(Map<String, dynamic> json) {
@@ -269,6 +350,8 @@ class Agent {
       platform: json['platform']?.toString() ?? 'hermitchat',
       containerId: json['container_id']?.toString() ?? '',
       personality: json['personality']?.toString() ?? '',
+      provider: json['provider']?.toString() ?? 'openrouter',
+      background: json['background']?.toString() ?? 'doodle',
     );
   }
 }
@@ -474,7 +557,7 @@ class _LoginScreenState extends State<LoginScreen> {
     );
     if (!mounted) return;
     setState(() => _isLoading = false);
-    
+
     if (success) {
       Navigator.pushReplacement(
         context,
@@ -482,7 +565,9 @@ class _LoginScreenState extends State<LoginScreen> {
       );
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Login failed. Check server URL and credentials.')),
+        const SnackBar(
+          content: Text('Login failed. Check server URL and credentials.'),
+        ),
       );
     }
   }
@@ -494,7 +579,10 @@ class _LoginScreenState extends State<LoginScreen> {
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 32.0, vertical: 24.0),
+            padding: const EdgeInsets.symmetric(
+              horizontal: 32.0,
+              vertical: 24.0,
+            ),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
@@ -565,7 +653,12 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  Widget _buildTextField(String label, String hint, bool isPassword, TextEditingController controller) {
+  Widget _buildTextField(
+    String label,
+    String hint,
+    bool isPassword,
+    TextEditingController controller,
+  ) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -736,8 +829,12 @@ class _AgentsMainScreenState extends State<AgentsMainScreen> {
   Future<void> _loadAgents() async {
     final data = await ApiService().getAgents();
     if (mounted) {
+      final agents = await ChatBackgroundPreferences.applyToAgents(
+        data.map((json) => Agent.fromJson(json)).toList(),
+      );
+      if (!mounted) return;
       setState(() {
-        _agents = data.map((json) => Agent.fromJson(json)).toList();
+        _agents = agents;
         _filteredAgents = _agents;
         _isLoading = false;
       });
@@ -758,165 +855,207 @@ class _AgentsMainScreenState extends State<AgentsMainScreen> {
         ),
         const SizedBox(height: 16),
         Expanded(
-          child: _isLoading 
-            ? const Center(child: CircularProgressIndicator(color: Colors.white))
-            : _filteredAgents.isEmpty
+          child: _isLoading
+              ? const Center(
+                  child: CircularProgressIndicator(color: Colors.white),
+                )
+              : _filteredAgents.isEmpty
               ? Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Icon(
-                        _isSearching ? LucideIcons.searchX : LucideIcons.messageSquare, 
-                        size: 48, 
-                        color: Colors.grey
+                        _isSearching
+                            ? LucideIcons.searchX
+                            : LucideIcons.messageSquare,
+                        size: 48,
+                        color: Colors.grey,
                       ),
                       const SizedBox(height: 16),
                       Text(
-                        _isSearching ? 'no agents found for "${_searchController.text}"' : 'no agents created yet',
-                        style: const TextStyle(color: Colors.grey, fontSize: 16),
+                        _isSearching
+                            ? 'no agents found for "${_searchController.text}"'
+                            : 'no agents created yet',
+                        style: const TextStyle(
+                          color: Colors.grey,
+                          fontSize: 16,
+                        ),
                       ),
                     ],
                   ),
                 )
               : ListView.builder(
-            padding: EdgeInsets.zero,
-            itemCount: _filteredAgents.length,
-            itemBuilder: (context, index) {
-              final agent = _filteredAgents[index];
-              final isRunning = agent.status == 'running';
-              final isTelegram = agent.platform == 'telegram';
-              final lastMsg = ChatMessage(
-                role: 'system', 
-                content: isTelegram ? 'Limited: Telegram Mode' : 'Active connection to OS', 
-                timestamp: DateTime.now(), 
-                isRead: true
-              );
+                  padding: EdgeInsets.zero,
+                  itemCount: _filteredAgents.length,
+                  itemBuilder: (context, index) {
+                    final agent = _filteredAgents[index];
+                    final isRunning = agent.status == 'running';
+                    final isTelegram = agent.platform == 'telegram';
+                    final lastMsg = ChatMessage(
+                      role: 'system',
+                      content: isTelegram
+                          ? 'Limited: Telegram Mode'
+                          : 'Active connection to OS',
+                      timestamp: DateTime.now(),
+                      isRead: true,
+                    );
 
-              return GestureDetector(
-                onTap: isTelegram ? null : () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => ChatScreen(agent: agent)),
-                ),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 12,
-                  ),
-                  decoration: const BoxDecoration(
-                    border: Border(
-                      bottom: BorderSide(color: Color(0xFF1A1A1A), width: 0.5),
-                    ),
-                  ),
-                  child: Opacity(
-                    opacity: isTelegram ? 0.6 : 1.0,
-                    child: Row(
-                      children: [
-                        Stack(
-                          children: [
-                            Container(
-                              width: 52,
-                              height: 52,
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF09090B),
-                                borderRadius: BorderRadius.circular(26),
-                                border: Border.all(
-                                  color: const Color(0xFF27272A),
-                                ),
+                    return GestureDetector(
+                      onTap: isTelegram
+                          ? null
+                          : () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => ChatScreen(agent: agent),
                               ),
-                              alignment: Alignment.center,
-                              child: agent.profilePic != null && agent.profilePic!.isNotEmpty
-                                ? ClipRRect(
-                                    borderRadius: BorderRadius.circular(26),
-                                    child: Image.network(
-                                      '${ApiService().baseUrl}${agent.profilePic}',
-                                      fit: BoxFit.cover,
-                                      width: 52,
-                                      height: 52,
-                                      errorBuilder: (context, error, stackTrace) => Text(agent.name[0]),
-                                    ),
-                                  )
-                                : Text(
-                                    agent.name[0],
-                                    style: const TextStyle(
-                                      fontSize: 20,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
                             ),
-                            if (isRunning)
-                              Positioned(
-                                right: 0,
-                                bottom: 0,
-                                child: Container(
-                                  width: 14,
-                                  height: 14,
-                                  decoration: BoxDecoration(
-                                    color: isTelegram ? Colors.blueAccent : const Color(0xFF10B981),
-                                    shape: BoxShape.circle,
-                                    border: Border.all(
-                                      color: Colors.black,
-                                      width: 2,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                          ],
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 12,
                         ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                        decoration: const BoxDecoration(
+                          border: Border(
+                            bottom: BorderSide(
+                              color: Color(0xFF1A1A1A),
+                              width: 0.5,
+                            ),
+                          ),
+                        ),
+                        child: Opacity(
+                          opacity: isTelegram ? 0.6 : 1.0,
+                          child: Row(
                             children: [
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              Stack(
                                 children: [
-                                  Text(
-                                    agent.name + (isTelegram ? " (Bot)" : ""),
-                                    style: const TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                  const Text(
-                                    'just now',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: Color(0xFF71717A),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 2),
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      isTelegram ? 'Managed via Telegram' : lastMsg.content,
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        color: isTelegram ? Colors.blueGrey : const Color(0xFF71717A),
+                                  Container(
+                                    width: 52,
+                                    height: 52,
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF09090B),
+                                      borderRadius: BorderRadius.circular(26),
+                                      border: Border.all(
+                                        color: const Color(0xFF27272A),
                                       ),
                                     ),
+                                    alignment: Alignment.center,
+                                    child:
+                                        agent.profilePic != null &&
+                                            agent.profilePic!.isNotEmpty
+                                        ? ClipRRect(
+                                            borderRadius: BorderRadius.circular(
+                                              26,
+                                            ),
+                                            child: Image.network(
+                                              '${ApiService().baseUrl}${agent.profilePic}',
+                                              fit: BoxFit.cover,
+                                              width: 52,
+                                              height: 52,
+                                              errorBuilder:
+                                                  (
+                                                    context,
+                                                    error,
+                                                    stackTrace,
+                                                  ) => Text(agent.name[0]),
+                                            ),
+                                          )
+                                        : Text(
+                                            agent.name[0],
+                                            style: const TextStyle(
+                                              fontSize: 20,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
                                   ),
+                                  if (isRunning)
+                                    Positioned(
+                                      right: 0,
+                                      bottom: 0,
+                                      child: Container(
+                                        width: 14,
+                                        height: 14,
+                                        decoration: BoxDecoration(
+                                          color: isTelegram
+                                              ? Colors.blueAccent
+                                              : const Color(0xFF10B981),
+                                          shape: BoxShape.circle,
+                                          border: Border.all(
+                                            color: Colors.black,
+                                            width: 2,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
                                 ],
+                              ),
+                              const SizedBox(width: 14),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        Text(
+                                          agent.name +
+                                              (isTelegram ? " (Bot)" : ""),
+                                          style: const TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                        const Text(
+                                          'just now',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: Color(0xFF71717A),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            isTelegram
+                                                ? 'Managed via Telegram'
+                                                : lastMsg.content,
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              color: isTelegram
+                                                  ? Colors.blueGrey
+                                                  : const Color(0xFF71717A),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              IconButton(
+                                icon: const Icon(
+                                  LucideIcons.settings,
+                                  size: 20,
+                                  color: Color(0xFF71717A),
+                                ),
+                                onPressed: () => Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        CreateAgentScreen(existingAgent: agent),
+                                  ),
+                                ).then((_) => _loadAgents()),
                               ),
                             ],
                           ),
                         ),
-                        IconButton(
-                          icon: const Icon(LucideIcons.settings, size: 20, color: Color(0xFF71717A)),
-                          onPressed: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(builder: (_) => CreateAgentScreen(existingAgent: agent)),
-                          ).then((_) => _loadAgents()),
-                        ),
-                      ],
-                    ),
-                  ),
+                      ),
+                    );
+                  },
                 ),
-              );
-            },
-          ),
         ),
       ],
     );
@@ -942,10 +1081,7 @@ class _AgentsMainScreenState extends State<AgentsMainScreen> {
                 SizedBox(width: 6),
                 Text(
                   'connected',
-                  style: TextStyle(
-                    color: Color(0xFF10B981),
-                    fontSize: 12,
-                  ),
+                  style: TextStyle(color: Color(0xFF10B981), fontSize: 12),
                 ),
               ],
             ),
@@ -1018,21 +1154,328 @@ class _ChatScreenState extends State<ChatScreen> {
   final ScrollController _scrollController = ScrollController();
   bool _takeoverMode = false;
   bool _isSending = false;
+  bool _showCommands = false;
+
+  // Offline message store — persisted locally and synced with server
+  // Ref: docs/chat_persistence.md
   final List<ChatMessage> _messages = [];
   StreamSubscription? _wsSubscription;
+
+  // Mutable background ID so it can be refreshed after the user saves config
+  late String _backgroundId;
+
+  static final RegExp _tagPattern = RegExp(
+    r'<([a-zA-Z_][a-zA-Z0-9_]*)>.*?</\1>',
+    multiLine: true,
+  );
+
+  // Available slash commands with descriptions shown in the palette
+  // Ref: docs/commands.md
+  static const List<Map<String, String>> _commands = [
+    {'command': '/status', 'description': 'Show server reachability & LLM config — no AI needed'},
+    {'command': '/reset',  'description': 'Restart the agent Docker container'},
+    {'command': '/clear',  'description': 'Clear full conversation & context window'},
+  ];
+
+  /// Returns the subset of commands that match the current input (search filter).
+  List<Map<String, String>> get _filteredCommands {
+    final query = _controller.text.toLowerCase();
+    if (query == '/') return _commands;
+    return _commands
+        .where((c) => c['command']!.toLowerCase().startsWith(query))
+        .toList();
+  }
+
+  bool _containsTags(String text) {
+    return _tagPattern.hasMatch(text);
+  }
+
+  void _rejectTagsWithEnd(String text) {
+    setState(() {
+      _messages.add(
+        ChatMessage(
+          role: 'system',
+          content: 'Tag rejected: Tags are not allowed in current mode. $text',
+          timestamp: DateTime.now(),
+          isRead: true,
+        ),
+      );
+      _messages.add(
+        ChatMessage(
+          role: 'system',
+          content: '<end>',
+          timestamp: DateTime.now(),
+          isRead: true,
+        ),
+      );
+    });
+    _scrollToBottom();
+  }
+
+  /// Handles slash commands.
+  /// /status is fully DETERMINISTIC — never calls the LLM.
+  /// /clear wipes the local message list AND calls the server to reset context.
+  /// Other commands are sent to the server like a regular message.
+  /// Ref: docs/commands.md
+  void _sendCommand(String command) async {
+    // Always close the command palette before processing
+    setState(() => _showCommands = false);
+
+    // ── /status ── deterministic, no LLM required ──────────────────────────
+    if (command.trim() == '/status') {
+      _executeStatusCommand();
+      return;
+    }
+
+    // ── /clear ── clears local conversation + server context ───────────────
+    if (command.trim() == '/clear') {
+      _executeClearCommand();
+      return;
+    }
+
+    // ── Other commands (e.g. /reset) — sent to server ──────────────────────
+    setState(() {
+      _messages.add(
+        ChatMessage(
+          role: 'user',
+          content: command,
+          timestamp: DateTime.now(),
+          isRead: true,
+        ),
+      );
+    });
+    _persistMessages();
+    _scrollToBottom();
+
+    final response = await ApiService().sendMessage(
+      widget.agent.id.toString(),
+      command,
+    );
+    if (!mounted) return;
+
+    if (response != null) {
+      final message =
+          response['message'] as String? ??
+          response['response'] as String? ??
+          '';
+      setState(() {
+        _messages.add(
+          ChatMessage(
+            role: 'assistant',
+            content: message,
+            timestamp: DateTime.now(),
+            isRead: true,
+          ),
+        );
+      });
+    } else {
+      setState(() {
+        _messages.add(
+          ChatMessage(
+            role: 'system',
+            content: 'Command sent.',
+            timestamp: DateTime.now(),
+            isRead: true,
+          ),
+        );
+      });
+    }
+    _persistMessages();
+    _scrollToBottom();
+  }
+
+  /// /status is deterministic: checks server reachability, LLM config, context
+  /// token usage and reports all locally — no LLM call needed.
+  void _executeStatusCommand() async {
+    final api = ApiService();
+    final now = DateTime.now();
+
+    // Add the user-issued command to chat
+    setState(() {
+      _messages.add(
+        ChatMessage(
+          role: 'user',
+          content: '/status',
+          timestamp: now,
+          isRead: true,
+        ),
+      );
+    });
+    _scrollToBottom();
+
+    // Check server reachability
+    bool serverReachable = false;
+    try {
+      final metrics = await api.getMetrics();
+      serverReachable = metrics != null;
+    } catch (_) {}
+
+    if (!mounted) return;
+
+    // Check LLM configuration (provider key presence)
+    bool llmConfigured = false;
+    String llmProvider = widget.agent.provider;
+    Map<String, dynamic>? settings;
+    try {
+      settings = await api.getSettings();
+      if (settings != null) {
+        final keyMap = {
+          'openrouter': settings['openrouterKey'],
+          'openai': settings['openaiKey'],
+          'anthropic': settings['anthropicKey'],
+          'gemini': settings['geminiKey'],
+        };
+        final key = keyMap[llmProvider];
+        llmConfigured = key != null && key.toString().isNotEmpty;
+      }
+    } catch (_) {}
+
+    if (!mounted) return;
+
+    // Fetch agent stats for context window info
+    Map<String, dynamic>? stats;
+    try {
+      stats = await api.getAgentStats(widget.agent.id.toString());
+    } catch (_) {}
+
+    if (!mounted) return;
+
+    // Build the deterministic status report
+    final buffer = StringBuffer();
+    buffer.writeln('=== /status report ===');
+    buffer.writeln();
+    buffer.writeln('🌐 Server: ${serverReachable ? "✅ Reachable" : "❌ Unreachable"} (${api.baseUrl ?? "not configured"})') ;
+    buffer.writeln();
+    buffer.writeln('🤖 LLM Provider : $llmProvider');
+    buffer.writeln('🔑 LLM API Key  : ${llmConfigured ? "✅ Configured" : "⚠️ Missing — add it in Settings → API Keys"}');
+    buffer.writeln();
+
+    if (stats != null) {
+      final tokens = stats['tokenEstimate'] ?? stats['tokens'] ?? 'N/A';
+      final ctxWindow = stats['contextWindow'] ?? 'N/A';
+      final calls = stats['llmApiCalls'] ?? 'N/A';
+      buffer.writeln('📊 Context Window : $ctxWindow tokens');
+      buffer.writeln('🔢 Token Estimate : $tokens');
+      buffer.writeln('📡 LLM API Calls  : $calls');
+    } else {
+      buffer.writeln('📊 Context stats  : unavailable');
+    }
+
+    buffer.writeln();
+    buffer.writeln('📱 Local messages : ${_messages.length}');
+    buffer.write  ('⏰ Timestamp      : ${now.toLocal()}');
+
+    setState(() {
+      _messages.add(
+        ChatMessage(
+          role: 'system',
+          content: buffer.toString(),
+          timestamp: DateTime.now(),
+          isRead: true,
+        ),
+      );
+    });
+    _persistMessages();
+    _scrollToBottom();
+  }
+
+  /// /clear — wipes local message list and calls server to reset agent context.
+  void _executeClearCommand() async {
+    // Add confirmation message first
+    setState(() {
+      _messages.add(
+        ChatMessage(
+          role: 'user',
+          content: '/clear',
+          timestamp: DateTime.now(),
+          isRead: true,
+        ),
+      );
+    });
+    _scrollToBottom();
+
+    // Call server to clear context
+    final response = await ApiService().sendMessage(
+      widget.agent.id.toString(),
+      '/clear',
+    );
+    if (!mounted) return;
+
+    // Clear local messages and update persisted copy
+    setState(() {
+      _messages.clear();
+      _messages.add(
+        ChatMessage(
+          role: 'system',
+          content: response != null
+              ? '✅ Conversation cleared. Context window reset.'
+              : '✅ Local conversation cleared. (Server may be offline.)',
+          timestamp: DateTime.now(),
+          isRead: true,
+        ),
+      );
+    });
+    _persistMessages();
+    _scrollToBottom();
+  }
+
+  void _showMetrics() async {
+    final metrics = await ApiService().getAgentStats(
+      widget.agent.id.toString(),
+    );
+    if (!mounted) return;
+
+    String content = 'Agent Metrics\n\n';
+    if (metrics != null) {
+      content += 'Tokens: ${metrics['tokenEstimate'] ?? 'N/A'}\n';
+      content += 'Words: ${metrics['wordCount'] ?? 'N/A'}\n';
+      content += 'API Calls: ${metrics['llmApiCalls'] ?? 'N/A'}\n';
+      content += 'Context Window: ${metrics['contextWindow'] ?? 'N/A'}';
+    } else {
+      content += 'Unable to load metrics';
+    }
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF18181B),
+        title: const Text(
+          'Agent Metrics',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: Text(
+          content,
+          style: const TextStyle(color: Color(0xFFA1A1AA)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   void initState() {
     super.initState();
+    _backgroundId = widget.agent.background;
+    _loadBackgroundPreference();
+    // Load persisted offline copy of conversation
     _loadMessages();
-    
+
+    // Listen for incoming WebSocket messages (real-time sync)
     _wsSubscription = ApiService().messageStream.listen((data) {
       if (!mounted) return;
-      if (data['type'] == 'new_message' && data['agent_id'].toString() == widget.agent.id.toString()) {
+      if (data['type'] == 'new_message' &&
+          data['agent_id'].toString() == widget.agent.id.toString()) {
         setState(() {
-          // Check if message already exists
-          if (!_messages.any((m) => m.content == data['content'] && m.role == data['role'])) {
-             _messages.add(
+          // Deduplicate: only add if not already present
+          if (!_messages.any(
+            (m) => m.content == data['content'] && m.role == data['role'],
+          )) {
+            _messages.add(
               ChatMessage(
                 role: data['role'],
                 content: data['content'],
@@ -1040,10 +1483,11 @@ class _ChatScreenState extends State<ChatScreen> {
                 isRead: true,
               ),
             );
+            _persistMessages();
             _scrollToBottom();
           }
         });
-        
+
         if (data['role'] == 'assistant') {
           _showNotification(data['content']);
         }
@@ -1051,19 +1495,73 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  Future<void> _loadBackgroundPreference() async {
+    final backgroundId = await ChatBackgroundPreferences.resolve(
+      widget.agent.id,
+      widget.agent.background,
+    );
+    if (!mounted) return;
+    setState(() => _backgroundId = backgroundId);
+  }
+
+  /// Loads persisted messages from SharedPreferences (offline copy).
+  /// This ensures the conversation survives app restarts and network outages.
   Future<void> _loadMessages() async {
-    // We could fetch actual history here if we had an endpoint for it in ApiService
-    // For now, it's enough to clear and wait for new ones or we can mock it
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = 'chat_messages_${widget.agent.id}';
+      final raw = prefs.getStringList(key) ?? [];
+      final loaded = raw.map((s) {
+        final parts = s.split('|||');
+        if (parts.length < 3) return null;
+        return ChatMessage(
+          role: parts[0],
+          content: parts[1],
+          timestamp: DateTime.tryParse(parts[2]) ?? DateTime.now(),
+          isRead: true,
+        );
+      }).whereType<ChatMessage>().toList();
+
+      if (loaded.isNotEmpty && mounted) {
+        setState(() => _messages.addAll(loaded));
+        _scrollToBottom();
+      }
+    } catch (_) {
+      // If loading fails, start with clean slate
+    }
+  }
+
+  /// Persists messages to SharedPreferences for offline availability.
+  /// Auto-syncs — called after every mutation of _messages.
+  Future<void> _persistMessages() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = 'chat_messages_${widget.agent.id}';
+      // Keep the last 200 messages to avoid unbounded growth
+      final toStore = _messages.length > 200
+          ? _messages.sublist(_messages.length - 200)
+          : _messages;
+      final raw = toStore
+          .map((m) => '${m.role}|||${m.content}|||${m.timestamp.toIso8601String()}')
+          .toList();
+      await prefs.setStringList(key, raw);
+    } catch (_) {
+      // Silently ignore persistence errors
+    }
   }
 
   Future<void> _showNotification(String body) async {
     if (kIsWeb) return;
-    const AndroidNotificationDetails androidPlatformChannelSpecifics = AndroidNotificationDetails(
-      'hermit_chat', 'Agent Messages',
-      importance: Importance.max,
-      priority: Priority.high,
+    const AndroidNotificationDetails androidPlatformChannelSpecifics =
+        AndroidNotificationDetails(
+          'hermit_chat',
+          'Agent Messages',
+          importance: Importance.max,
+          priority: Priority.high,
+        );
+    const NotificationDetails platformChannelSpecifics = NotificationDetails(
+      android: androidPlatformChannelSpecifics,
     );
-    const NotificationDetails platformChannelSpecifics = NotificationDetails(android: androidPlatformChannelSpecifics);
     await flutterLocalNotificationsPlugin.show(
       id: 0,
       title: 'Hermit Agent',
@@ -1072,10 +1570,38 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  /// Sends a user message or dispatches a slash-command.
+  /// Closes the command palette and persists messages for offline availability.
   void _sendMessage() async {
     final text = _controller.text.trim();
     if (text.isEmpty || _isSending) return;
-    
+
+    // Close the command palette whenever send is pressed
+    setState(() => _showCommands = false);
+
+    // Dispatch slash commands deterministically
+    if (text.startsWith('/')) {
+      _controller.clear();
+      _sendCommand(text);
+      return;
+    }
+
+    if (!_takeoverMode && _containsTags(text)) {
+      setState(() {
+        _messages.add(
+          ChatMessage(
+            role: 'user',
+            content: text,
+            timestamp: DateTime.now(),
+            isRead: true,
+          ),
+        );
+      });
+      _rejectTagsWithEnd(text);
+      _controller.clear();
+      return;
+    }
+
     setState(() {
       _isSending = true;
       _messages.add(
@@ -1088,18 +1614,38 @@ class _ChatScreenState extends State<ChatScreen> {
       );
       _controller.clear();
     });
+    _persistMessages();
     _scrollToBottom();
-    
-    final response = await ApiService().sendMessage(widget.agent.id.toString(), text);
+
+    final response = await ApiService().sendMessage(
+      widget.agent.id.toString(),
+      text,
+    );
     if (!mounted) return;
-    
+
     setState(() {
       _isSending = false;
       if (response != null) {
-        final message = response['message'] as String? ?? response['response'] as String? ?? '';
+        String message =
+            response['message'] as String? ??
+            response['response'] as String? ??
+            '';
+
+        if (_takeoverMode && _containsTags(message)) {
+          message = message.replaceAll(_tagPattern, '[Tag rejected]');
+          _messages.add(
+            ChatMessage(
+              role: 'system',
+              content: '<end>',
+              timestamp: DateTime.now(),
+              isRead: true,
+            ),
+          );
+        }
+
         final filesDynamic = response['files'] as List<dynamic>? ?? [];
         final files = filesDynamic.map((f) => f.toString()).toList();
-        
+
         _messages.add(
           ChatMessage(
             role: 'assistant',
@@ -1110,16 +1656,22 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         );
       } else {
+        // In takeover mode the user is pretending to be the agent.
+        // A network failure does not mean the agent failed — surface a clearer message.
+        final errMsg = _takeoverMode
+            ? 'System: Could not reach the server. Your message was saved locally.'
+            : 'Error: Failed to reach the agent. Message kept locally — will retry when online.';
         _messages.add(
           ChatMessage(
             role: 'system',
-            content: 'Error: Failed to reach the agent.',
+            content: errMsg,
             timestamp: DateTime.now(),
             isRead: true,
           ),
         );
       }
     });
+    _persistMessages();
     _scrollToBottom();
   }
 
@@ -1153,31 +1705,45 @@ class _ChatScreenState extends State<ChatScreen> {
     FilePickerResult? result = await FilePicker.platform.pickFiles();
     if (result != null) {
       final xfile = result.files.single.xFile;
-      
+
       setState(() => _isSending = true);
-      
-      final containerId = widget.agent.containerId.isEmpty 
-          ? "agent-${widget.agent.name.toLowerCase()}" 
+
+      final containerId = widget.agent.containerId.isEmpty
+          ? "agent-${widget.agent.name.toLowerCase()}"
           : widget.agent.containerId;
-      
-      bool success = await ApiService().uploadFileToContainer(containerId, xfile);
+
+      bool success = await ApiService().uploadFileToContainer(
+        containerId,
+        xfile,
+      );
 
       if (!mounted) return;
       setState(() => _isSending = false);
-      
+
       if (success) {
         setState(() {
-          _messages.add(ChatMessage(
-            role: 'system',
-            content: 'File uploaded to workspace/in: ${result.files.single.name}',
-            timestamp: DateTime.now(),
-            isRead: true,
-          ));
+          _messages.add(
+            ChatMessage(
+              role: 'system',
+              content:
+                  'File uploaded to workspace/in: ${result.files.single.name}',
+              timestamp: DateTime.now(),
+              isRead: true,
+            ),
+          );
         });
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('File upload failed')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('File upload failed')));
       }
     }
+  }
+
+  /// Returns the background painter based on the mutable _backgroundId.
+  /// This updates after the user saves changes in the config screen.
+  CustomPainter _resolveBackgroundPainter() {
+    return ChatBackgroundPainter.forId(_backgroundId);
   }
 
   // Deleted duplicate _buildInputArea
@@ -1201,13 +1767,30 @@ class _ChatScreenState extends State<ChatScreen> {
                 color: const Color(0xFF1A1A1A),
                 borderRadius: BorderRadius.circular(18),
               ),
-              alignment: Alignment.center,
-              child: Text(
-                widget.agent.name[0],
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                ),
+              child: ClipOval(
+                child:
+                    widget.agent.profilePic != null &&
+                        widget.agent.profilePic!.isNotEmpty
+                    ? Image.network(
+                        '${ApiService().baseUrl}${widget.agent.profilePic}',
+                        fit: BoxFit.cover,
+                        width: 36,
+                        height: 36,
+                        errorBuilder: (context, error, stackTrace) => Text(
+                          widget.agent.name[0],
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                          ),
+                        ),
+                      )
+                    : Text(
+                        widget.agent.name[0],
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
+                      ),
               ),
             ),
             const SizedBox(width: 12),
@@ -1248,30 +1831,124 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
         ),
         actions: [
-          IconButton(
+          PopupMenuButton<String>(
             icon: const Icon(LucideIcons.moreVertical, size: 20),
-            onPressed: () {},
+            color: const Color(0xFF18181B),
+            onSelected: (value) {
+              switch (value) {
+                case 'status':
+                  _sendCommand('/status');
+                  break;
+                case 'reset':
+                  _sendCommand('/reset');
+                  break;
+                case 'clear':
+                  _sendCommand('/clear');
+                  break;
+                case 'metrics':
+                  _showMetrics();
+                  break;
+                case 'config':
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          CreateAgentScreen(existingAgent: widget.agent),
+                    ),
+                  ).then((_) async {
+                    if (!mounted) return;
+                    final updatedBackground =
+                        await ChatBackgroundPreferences.resolve(
+                          widget.agent.id,
+                          _backgroundId,
+                        );
+                    if (!mounted) return;
+                    setState(() => _backgroundId = updatedBackground);
+                  });
+                  break;
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'status',
+                child: Row(
+                  children: [
+                    Icon(LucideIcons.activity, size: 18, color: Colors.white),
+                    SizedBox(width: 12),
+                    Text('Status', style: TextStyle(color: Colors.white)),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'reset',
+                child: Row(
+                  children: [
+                    Icon(LucideIcons.rotateCcw, size: 18, color: Colors.white),
+                    SizedBox(width: 12),
+                    Text('Reset', style: TextStyle(color: Colors.white)),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'clear',
+                child: Row(
+                  children: [
+                    Icon(LucideIcons.trash2, size: 18, color: Colors.white),
+                    SizedBox(width: 12),
+                    Text('Clear', style: TextStyle(color: Colors.white)),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'metrics',
+                child: Row(
+                  children: [
+                    Icon(LucideIcons.barChart2, size: 18, color: Colors.white),
+                    SizedBox(width: 12),
+                    Text('Metrics', style: TextStyle(color: Colors.white)),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'config',
+                child: Row(
+                  children: [
+                    Icon(LucideIcons.settings, size: 18, color: Colors.white),
+                    SizedBox(width: 12),
+                    Text('Config', style: TextStyle(color: Colors.white)),
+                  ],
+                ),
+              ),
+            ],
           ),
         ],
       ),
-      body: Column(
+      body: Stack(
         children: [
-          Expanded(
-            child: ListView.builder(
-              controller: _scrollController,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              itemCount: _messages.length,
-              itemBuilder: (context, index) {
-                final msg = _messages[index];
-                final isUser = msg.role == 'user';
-                final isSystem = msg.role == 'system';
-                final isFirst =
-                    index == 0 || _messages[index - 1].role != msg.role;
-                return _buildMessageBubble(msg, isUser, isSystem, isFirst);
-              },
-            ),
+          CustomPaint(painter: _resolveBackgroundPainter(), size: Size.infinite),
+          Column(
+            children: [
+              Expanded(
+                child: ListView.builder(
+                  controller: _scrollController,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                  itemCount: _messages.length,
+                  itemBuilder: (context, index) {
+                    final msg = _messages[index];
+                    final isUser = msg.role == 'user';
+                    final isSystem = msg.role == 'system';
+                    final isFirst =
+                        index == 0 || _messages[index - 1].role != msg.role;
+                    return _buildMessageBubble(msg, isUser, isSystem, isFirst);
+                  },
+                ),
+              ),
+              _buildInputArea(),
+            ],
           ),
-          _buildInputArea(),
         ],
       ),
     );
@@ -1298,7 +1975,9 @@ class _ChatScreenState extends State<ChatScreen> {
     }
 
     final baseUrl = ApiService().baseUrl ?? '';
-    final avatarUrl = widget.agent.profilePic != null ? '$baseUrl${widget.agent.profilePic}' : null;
+    final avatarUrl = widget.agent.profilePic != null
+        ? '$baseUrl${widget.agent.profilePic}'
+        : null;
 
     Widget bubbleContent = Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -1353,17 +2032,22 @@ class _ChatScreenState extends State<ChatScreen> {
     if (msg.files != null && msg.files!.isNotEmpty) {
       List<Widget> fileWidgets = [];
       for (final file in msg.files!) {
-        final containerId = 'agent-${widget.agent.name.toLowerCase().replaceAll(' ', '')}';
-        final fileUrl = '$baseUrl/api/containers/$containerId/download?file=$file';
+        final containerId =
+            'agent-${widget.agent.name.toLowerCase().replaceAll(' ', '')}';
+        final fileUrl =
+            '$baseUrl/api/containers/$containerId/download?file=$file';
         final ext = file.split('.').last.toLowerCase();
-        
+
         if (['png', 'jpg', 'jpeg', 'gif', 'webp'].contains(ext)) {
           fileWidgets.add(
             Padding(
               padding: const EdgeInsets.only(top: 8.0),
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(12),
-                child: Image.network(fileUrl, headers: {'Authorization': 'Bearer ${ApiService().token}'}),
+                child: Image.network(
+                  fileUrl,
+                  headers: {'Authorization': 'Bearer ${ApiService().token}'},
+                ),
               ),
             ),
           );
@@ -1373,7 +2057,10 @@ class _ChatScreenState extends State<ChatScreen> {
               padding: const EdgeInsets.only(top: 8.0),
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(12),
-                child: _VideoPlayerWidget(url: fileUrl, token: ApiService().token ?? ''),
+                child: _VideoPlayerWidget(
+                  url: fileUrl,
+                  token: ApiService().token ?? '',
+                ),
               ),
             ),
           );
@@ -1393,28 +2080,56 @@ class _ChatScreenState extends State<ChatScreen> {
           );
         }
       }
-      
+
       bubbleContent = Column(
-        crossAxisAlignment: isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-        children: [
-          bubbleContent,
-          ...fileWidgets,
-        ],
+        crossAxisAlignment: isUser
+            ? CrossAxisAlignment.end
+            : CrossAxisAlignment.start,
+        children: [bubbleContent, ...fileWidgets],
       );
     }
 
     if (!isUser && !isSystem) {
       return Padding(
-        padding: EdgeInsets.only(left: 12, right: 60, top: isFirst ? 8 : 2, bottom: 2),
+        padding: EdgeInsets.only(
+          left: 12,
+          right: 60,
+          top: isFirst ? 8 : 2,
+          bottom: 2,
+        ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
             if (isFirst)
-              CircleAvatar(
-                radius: 14,
-                backgroundColor: const Color(0xFF1A1A1A),
-                backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl, headers: {'Authorization': 'Bearer ${ApiService().token}'}) : null,
-                child: avatarUrl == null ? Text(widget.agent.name[0], style: const TextStyle(fontSize: 10)) : null,
+              Container(
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xFF1A1A1A),
+                ),
+                child: ClipOval(
+                  child: avatarUrl != null
+                      ? Image.network(
+                          avatarUrl,
+                          fit: BoxFit.cover,
+                          width: 28,
+                          height: 28,
+                          headers: {
+                            'Authorization': 'Bearer ${ApiService().token}',
+                          },
+                          errorBuilder: (context, error, stackTrace) => Text(
+                            widget.agent.name[0],
+                            style: const TextStyle(fontSize: 10),
+                          ),
+                        )
+                      : Center(
+                          child: Text(
+                            widget.agent.name[0],
+                            style: const TextStyle(fontSize: 10),
+                          ),
+                        ),
+                ),
               )
             else
               const SizedBox(width: 28),
@@ -1459,12 +2174,45 @@ class _ChatScreenState extends State<ChatScreen> {
             Row(
               children: [
                 const Text(
-                  'XML',
+                  'takeover',
                   style: TextStyle(
                     fontSize: 10,
                     fontWeight: FontWeight.bold,
                     color: Color(0xFF52525B),
                     letterSpacing: 1,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                GestureDetector(
+                  onTap: () {
+                    showDialog(
+                      context: context,
+                      builder: (context) => AlertDialog(
+                        backgroundColor: const Color(0xFF18181B),
+                        title: const Text(
+                          'Takeover Mode',
+                          style: TextStyle(color: Colors.white),
+                        ),
+                        content: const Text(
+                          'When takeover mode is ON, you can directly control the system with commands like <terminal>ls -la</terminal>. The AI agent will not process commands.\n\nWhen OFF (default), only the AI agent can execute commands.',
+                          style: TextStyle(color: Color(0xFFA1A1AA)),
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context),
+                            child: const Text(
+                              'Got it',
+                              style: TextStyle(color: Colors.white),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                  child: const Icon(
+                    LucideIcons.helpCircle,
+                    size: 14,
+                    color: Color(0xFF52525B),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -1509,7 +2257,11 @@ class _ChatScreenState extends State<ChatScreen> {
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 IconButton(
-                  icon: const Icon(LucideIcons.paperclip, size: 20, color: Color(0xFF52525B)),
+                  icon: const Icon(
+                    LucideIcons.paperclip,
+                    size: 20,
+                    color: Color(0xFF52525B),
+                  ),
                   onPressed: _isSending ? null : _pickAndUploadFile,
                 ),
                 Expanded(
@@ -1519,14 +2271,21 @@ class _ChatScreenState extends State<ChatScreen> {
                       controller: _controller,
                       maxLines: null,
                       textInputAction: TextInputAction.newline,
+                      onChanged: (value) {
+                        // Show palette on '/' and keep it open for search filtering.
+                        // Hide when the text is empty or no longer starts with '/'
+                        setState(() {
+                          _showCommands = value.startsWith('/');
+                        });
+                      },
                       style: TextStyle(
                         fontFamily: _takeoverMode ? 'monospace' : null,
                         fontSize: 15,
                       ),
                       decoration: InputDecoration(
                         hintText: _takeoverMode
-                            ? 'Enter XML command...'
-                            : 'Message...',
+                            ? 'Enter command (e.g., <terminal>ls</terminal>)'
+                            : 'Message... or type / for commands',
                         hintStyle: const TextStyle(color: Color(0xFF3F3F46)),
                         filled: true,
                         fillColor: const Color(0xFF1A1A1A),
@@ -1563,12 +2322,601 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
               ],
             ),
+            if (_showCommands && _filteredCommands.isNotEmpty) _buildCommandPalette(),
           ],
         ),
       ),
     );
   }
+
+  /// Command palette widget shown when user types '/'.
+  /// Acts as a real-time search filter — e.g. '/re' shows only /reset.
+  Widget _buildCommandPalette() {
+    final cmds = _filteredCommands;
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF18181B),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF27272A)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: Text(
+              'COMMANDS',
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF52525B),
+                letterSpacing: 1,
+              ),
+            ),
+          ),
+          ...List.generate(cmds.length, (index) {
+            final cmd = cmds[index];
+            return InkWell(
+              onTap: () {
+                // Selecting a command executes it immediately
+                _controller.clear();
+                setState(() => _showCommands = false);
+                _sendCommand(cmd['command']!);
+              },
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 10,
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF27272A),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        cmd['command']!,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        cmd['description']!,
+                        style: const TextStyle(
+                          color: Color(0xFF71717A),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }),
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
 }
+
+/// Factory for all available chat background painters (dark mode).
+/// Ref: docs/chat_backgrounds.md
+class ChatBackgroundPainter {
+  /// Returns the appropriate CustomPainter for the given background ID.
+  static CustomPainter forId(String id) {
+    switch (id) {
+      case 'minimal':
+        return _MinimalBackgroundPainter();
+      case 'gradient':
+        return _GradientBackgroundPainter();
+      case 'grid':
+        return _GridBackgroundPainter();
+      case 'dots':
+        return _DotsBackgroundPainter();
+      case 'waves':
+        return _WavesBackgroundPainter();
+      case 'hexagon':
+        return _HexagonBackgroundPainter();
+      case 'circuit':
+        return _CircuitBackgroundPainter();
+      case 'aurora':
+        return _AuroraBackgroundPainter();
+      case 'doodle':
+      default:
+        return _DoodleBackgroundPainter();
+    }
+  }
+}
+
+// ─── Doodle (Telegram/WhatsApp-inspired, but distinct) ──────────────────────
+class _DoodleBackgroundPainter extends CustomPainter {
+  void _drawRoundedDiamond(
+    Canvas canvas,
+    Paint paint,
+    Offset center,
+    double radius,
+  ) {
+    final path = Path()
+      ..moveTo(center.dx, center.dy - radius)
+      ..quadraticBezierTo(
+        center.dx + radius * 0.9,
+        center.dy - radius * 0.9,
+        center.dx + radius,
+        center.dy,
+      )
+      ..quadraticBezierTo(
+        center.dx + radius * 0.9,
+        center.dy + radius * 0.9,
+        center.dx,
+        center.dy + radius,
+      )
+      ..quadraticBezierTo(
+        center.dx - radius * 0.9,
+        center.dy + radius * 0.9,
+        center.dx - radius,
+        center.dy,
+      )
+      ..quadraticBezierTo(
+        center.dx - radius * 0.9,
+        center.dy - radius * 0.9,
+        center.dx,
+        center.dy - radius,
+      )
+      ..close();
+    canvas.drawPath(path, paint);
+  }
+
+  void _drawPaperPlane(Canvas canvas, Paint paint, Offset center, double size) {
+    final path = Path()
+      ..moveTo(center.dx - size * 0.95, center.dy + size * 0.15)
+      ..lineTo(center.dx + size, center.dy - size * 0.1)
+      ..lineTo(center.dx - size * 0.15, center.dy + size * 0.95)
+      ..lineTo(center.dx + size * 0.05, center.dy + size * 0.28)
+      ..close();
+    canvas.drawPath(path, paint);
+    canvas.drawLine(
+      Offset(center.dx + size * 0.05, center.dy + size * 0.28),
+      Offset(center.dx - size * 0.48, center.dy + size * 0.02),
+      paint,
+    );
+  }
+
+  void _drawCrescent(Canvas canvas, Paint paint, Offset center, double radius) {
+    final outer = Path()
+      ..addOval(Rect.fromCircle(center: center, radius: radius));
+    final inner = Path()
+      ..addOval(
+        Rect.fromCircle(
+          center: Offset(center.dx + radius * 0.42, center.dy - radius * 0.08),
+          radius: radius * 0.82,
+        ),
+      );
+    final path = Path.combine(PathOperation.difference, outer, inner);
+    canvas.drawPath(path, paint);
+  }
+
+  void _drawSpark(Canvas canvas, Paint paint, Offset center, double radius) {
+    final path = Path()
+      ..moveTo(center.dx, center.dy - radius)
+      ..lineTo(center.dx + radius * 0.28, center.dy - radius * 0.28)
+      ..lineTo(center.dx + radius, center.dy)
+      ..lineTo(center.dx + radius * 0.28, center.dy + radius * 0.28)
+      ..lineTo(center.dx, center.dy + radius)
+      ..lineTo(center.dx - radius * 0.28, center.dy + radius * 0.28)
+      ..lineTo(center.dx - radius, center.dy)
+      ..lineTo(center.dx - radius * 0.28, center.dy - radius * 0.28)
+      ..close();
+    canvas.drawPath(path, paint);
+  }
+
+  void _drawArcWave(Canvas canvas, Paint paint, Offset start, double width) {
+    final path = Path()..moveTo(start.dx, start.dy);
+    final segment = width / 3;
+    for (int i = 0; i < 3; i++) {
+      final x0 = start.dx + segment * i;
+      final x1 = x0 + segment;
+      path.quadraticBezierTo(
+        x0 + segment / 2,
+        start.dy - (i.isEven ? 10 : 7),
+        x1,
+        start.dy,
+      );
+    }
+    canvas.drawPath(path, paint);
+  }
+
+  void _drawLoop(Canvas canvas, Paint paint, Offset center, Size size) {
+    final path = Path()
+      ..addOval(
+        Rect.fromCenter(center: center, width: size.width, height: size.height),
+      );
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      Paint()..color = const Color(0xFF000000),
+    );
+
+    for (final (center, color, radius) in [
+      (
+        Offset(size.width * 0.18, size.height * 0.2),
+        const Color(0x06BFE9FF),
+        size.width * 0.42,
+      ),
+      (
+        Offset(size.width * 0.84, size.height * 0.74),
+        const Color(0x051EE3CF),
+        size.width * 0.46,
+      ),
+    ]) {
+      canvas.drawCircle(
+        center,
+        radius,
+        Paint()
+          ..color = color
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 110),
+      );
+    }
+
+    final paint = Paint()
+      ..color = const Color(0x12F4FBFF)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    final w = size.width;
+    final h = size.height;
+
+    _drawPaperPlane(canvas, paint, Offset(w * 0.16, h * 0.13), w * 0.036);
+    _drawPaperPlane(canvas, paint, Offset(w * 0.82, h * 0.27), w * 0.028);
+    _drawPaperPlane(canvas, paint, Offset(w * 0.26, h * 0.82), w * 0.03);
+
+    _drawCrescent(canvas, paint, Offset(w * 0.83, h * 0.13), w * 0.034);
+    _drawCrescent(canvas, paint, Offset(w * 0.13, h * 0.63), w * 0.026);
+
+    _drawRoundedDiamond(canvas, paint, Offset(w * 0.44, h * 0.16), w * 0.026);
+    _drawRoundedDiamond(canvas, paint, Offset(w * 0.72, h * 0.58), w * 0.022);
+    _drawRoundedDiamond(canvas, paint, Offset(w * 0.28, h * 0.4), w * 0.019);
+
+    _drawSpark(canvas, paint, Offset(w * 0.62, h * 0.12), w * 0.024);
+    _drawSpark(canvas, paint, Offset(w * 0.9, h * 0.72), w * 0.018);
+    _drawSpark(canvas, paint, Offset(w * 0.18, h * 0.92), w * 0.018);
+
+    _drawArcWave(canvas, paint, Offset(w * 0.08, h * 0.26), w * 0.26);
+    _drawArcWave(canvas, paint, Offset(w * 0.58, h * 0.42), w * 0.2);
+    _drawArcWave(canvas, paint, Offset(w * 0.3, h * 0.72), w * 0.24);
+
+    _drawLoop(
+      canvas,
+      paint,
+      Offset(w * 0.52, h * 0.3),
+      Size(w * 0.11, h * 0.045),
+    );
+    _drawLoop(
+      canvas,
+      paint,
+      Offset(w * 0.76, h * 0.87),
+      Size(w * 0.13, h * 0.05),
+    );
+    _drawLoop(
+      canvas,
+      paint,
+      Offset(w * 0.18, h * 0.5),
+      Size(w * 0.09, h * 0.038),
+    );
+
+    final dotPaint = Paint()..color = const Color(0x14F8FDFF);
+    for (final offset in [
+      Offset(w * 0.34, h * 0.08),
+      Offset(w * 0.69, h * 0.2),
+      Offset(w * 0.49, h * 0.49),
+      Offset(w * 0.11, h * 0.78),
+      Offset(w * 0.59, h * 0.95),
+      Offset(w * 0.87, h * 0.52),
+    ]) {
+      canvas.drawCircle(offset, 2.1, dotPaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+// ─── Minimal (subtle diagonal lines on pure black) ────────────────────────────
+class _MinimalBackgroundPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      Paint()..color = const Color(0xFF050505),
+    );
+    final p = Paint()
+      ..color = const Color(0x08FFFFFF)
+      ..strokeWidth = 0.8
+      ..style = PaintingStyle.stroke;
+    const step = 28.0;
+    for (double i = -size.height; i < size.width + size.height; i += step) {
+      canvas.drawLine(Offset(i, 0), Offset(i + size.height, size.height), p);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+// ─── Gradient (dark purple-to-teal soft gradient) ─────────────────────────────
+class _GradientBackgroundPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Rect.fromLTWH(0, 0, size.width, size.height);
+    final gradient = LinearGradient(
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+      colors: const [
+        Color(0xFF0D0D1A),
+        Color(0xFF0A1628),
+        Color(0xFF091A1A),
+      ],
+    );
+    canvas.drawRect(rect, Paint()..shader = gradient.createShader(rect));
+
+    // Soft luminous orbs
+    for (final (pos, color, radius) in [
+      (Offset(size.width * 0.15, size.height * 0.25), const Color(0x18673AB7), size.width * 0.5),
+      (Offset(size.width * 0.85, size.height * 0.75), const Color(0x1200BCD4), size.width * 0.55),
+    ]) {
+      canvas.drawCircle(
+        pos,
+        radius,
+        Paint()
+          ..color = color
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 80),
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+// ─── Grid (subtle dot-grid on near-black) ────────────────────────────────────
+class _GridBackgroundPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      Paint()..color = const Color(0xFF080808),
+    );
+    final p = Paint()..color = const Color(0x1AFFFFFF);
+    const gap = 24.0;
+    for (double x = 0; x < size.width; x += gap) {
+      for (double y = 0; y < size.height; y += gap) {
+        canvas.drawCircle(Offset(x, y), 1.2, p);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+// ─── Dots (polka-dot pattern inspired by Telegram) ───────────────────────────
+class _DotsBackgroundPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      Paint()..color = const Color(0xFF0A0A0A),
+    );
+    final p = Paint()..color = const Color(0x20FFFFFF);
+    const gap = 20.0;
+    bool offset = false;
+    for (double y = 0; y < size.height + gap; y += gap) {
+      for (double x = offset ? gap / 2 : 0.0; x < size.width + gap; x += gap) {
+        canvas.drawCircle(Offset(x, y), 1.5, p);
+      }
+      offset = !offset;
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+// ─── Waves (horizontal wave lines, Telegram-inspired) ────────────────────────
+class _WavesBackgroundPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      Paint()..color = const Color(0xFF080810),
+    );
+    final p = Paint()
+      ..color = const Color(0x12FFFFFF)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2;
+    const waveHeight = 14.0;
+    const waveLength = 60.0;
+    const rowGap = 30.0;
+    for (double y = 0; y < size.height + rowGap; y += rowGap) {
+      final path = Path();
+      path.moveTo(0, y);
+      double x = 0;
+      bool up = true;
+      while (x < size.width) {
+        path.quadraticBezierTo(
+          x + waveLength / 2,
+          y + (up ? -waveHeight : waveHeight),
+          x + waveLength,
+          y,
+        );
+        x += waveLength;
+        up = !up;
+      }
+      canvas.drawPath(path, p);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+// ─── Hexagon (honeycomb grid) ─────────────────────────────────────────────────
+class _HexagonBackgroundPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      Paint()..color = const Color(0xFF060608),
+    );
+    final p = Paint()
+      ..color = const Color(0x12FFFFFF)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.8;
+    const r = 22.0;
+    final h = r * 1.732; // sqrt(3) * r
+    final colSpacing = r * 3;
+    final rowSpacing = h;
+    for (double row = 0; row * rowSpacing < size.height + h; row++) {
+      for (double col = 0; col * colSpacing < size.width + colSpacing; col++) {
+        final cx = col * colSpacing + (row.toInt().isOdd ? r * 1.5 : 0);
+        final cy = row * rowSpacing;
+        _drawHex(canvas, Offset(cx, cy), r, p);
+      }
+    }
+  }
+
+  void _drawHex(Canvas canvas, Offset center, double r, Paint p) {
+    final path = Path();
+    for (int i = 0; i < 6; i++) {
+      final angle = (60 * i - 30) * 3.14159 / 180;
+      final x = center.dx + r * (angle == 0 ? 1 : (Math_cos(angle)));
+      final y = center.dy + r * Math_sin(angle);
+      if (i == 0) {
+        path.moveTo(x, y);
+      } else {
+        path.lineTo(x, y);
+      }
+    }
+    path.close();
+    canvas.drawPath(path, p);
+  }
+
+  // Inline trig helpers to avoid dart:math import collision in scope
+  static double Math_sin(double a) => _sin(a);
+  static double Math_cos(double a) => _cos(a);
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+double _sin(double a) => math.sin(a);
+double _cos(double a) => math.cos(a);
+
+// ─── Circuit (PCB trace lines) ────────────────────────────────────────────────
+class _CircuitBackgroundPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      Paint()..color = const Color(0xFF040A08),
+    );
+    final p = Paint()
+      ..color = const Color(0x1810B981)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.0;
+    final nodePaint = Paint()..color = const Color(0x2510B981);
+
+    // Draw horizontal and vertical trace lines
+    final segs = [
+      [0.1, 0.2, 0.5, 0.2], [0.5, 0.2, 0.5, 0.5], [0.5, 0.5, 0.9, 0.5],
+      [0.2, 0.4, 0.2, 0.7], [0.2, 0.7, 0.6, 0.7], [0.6, 0.7, 0.6, 0.9],
+      [0.7, 0.1, 0.7, 0.35], [0.7, 0.35, 0.95, 0.35],
+      [0.05, 0.6, 0.35, 0.6], [0.35, 0.6, 0.35, 0.85],
+      [0.4, 0.15, 0.4, 0.4],  [0.4, 0.4, 0.65, 0.4],
+      [0.8, 0.55, 0.8, 0.8],  [0.15, 0.9, 0.55, 0.9],
+    ];
+    for (final s in segs) {
+      canvas.drawLine(
+        Offset(size.width * s[0], size.height * s[1]),
+        Offset(size.width * s[2], size.height * s[3]),
+        p,
+      );
+    }
+    // Draw circuit nodes
+    for (final n in [
+      [0.5, 0.2], [0.5, 0.5], [0.2, 0.7], [0.6, 0.7],
+      [0.7, 0.35], [0.35, 0.6], [0.4, 0.4], [0.8, 0.55],
+    ]) {
+      canvas.drawCircle(
+        Offset(size.width * n[0], size.height * n[1]),
+        3,
+        nodePaint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+// ─── Aurora (animated-look northern lights gradient) ─────────────────────────
+class _AuroraBackgroundPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      Paint()..color = const Color(0xFF05080F),
+    );
+    // Aurora bands
+    final bands = [
+      (Offset(size.width * 0.0, size.height * 0.35), const Color(0x18006064), size.width * 0.8),
+      (Offset(size.width * 0.3, size.height * 0.5), const Color(0x12004D40), size.width * 0.9),
+      (Offset(size.width * 0.6, size.height * 0.25), const Color(0x151A237E), size.width * 0.7),
+    ];
+    for (final (center, color, radius) in bands) {
+      canvas.drawCircle(
+        center,
+        radius,
+        Paint()
+          ..color = color
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 90),
+      );
+    }
+    // Subtle star dots
+    final starPaint = Paint()..color = const Color(0x25FFFFFF);
+    for (final pos in [
+      Offset(size.width * 0.1, size.height * 0.08),
+      Offset(size.width * 0.3, size.height * 0.15),
+      Offset(size.width * 0.55, size.height * 0.06),
+      Offset(size.width * 0.75, size.height * 0.12),
+      Offset(size.width * 0.9, size.height * 0.07),
+      Offset(size.width * 0.45, size.height * 0.2),
+      Offset(size.width * 0.85, size.height * 0.25),
+      Offset(size.width * 0.15, size.height * 0.3),
+    ]) {
+      canvas.drawCircle(pos, 1.0, starPaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -1621,87 +2969,93 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget build(BuildContext context) {
     final host = _metrics?['host'] ?? {};
     final containers = _metrics?['containers'] as List<dynamic>? ?? [];
-    
+
     final cpuVal = host['cpuPercent'] ?? host['cpu'] ?? 0.0;
     final memVal = host['memUsageMB'] ?? host['memory'] ?? 0.0;
-    
+
     final cpuStr = (cpuVal is num) ? cpuVal.toStringAsFixed(1) : '0.0';
-    final memStr = (memVal is num) ? (memVal / 1024).toStringAsFixed(1) : '0.0'; 
+    final memStr = (memVal is num) ? (memVal / 1024).toStringAsFixed(1) : '0.0';
 
-    return _isLoading 
-      ? const Center(child: CircularProgressIndicator(color: Colors.white))
-      : Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SizedBox(height: 24),
-              const Text(
-                'system health',
-                style: TextStyle(fontSize: 32, fontWeight: FontWeight.w900),
-              ),
-              const SizedBox(height: 24),
-              Row(
-                children: [
-                  Expanded(
-                    child: _buildMetricCard(
-                      'CPU',
-                      cpuStr,
-                      '%',
-                      LucideIcons.cpu,
-                      _getUsageColor(cpuVal.toDouble()),
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: _buildMetricCard(
-                      'RAM',
-                      memStr,
-                      'gb',
-                      LucideIcons.memoryStick,
-                      _getUsageColor((memVal.toDouble() / 16000.0) * 100), // Assuming 16GB total for color scaling
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              _buildMetricCard(
-                'STORAGE',
-                '45.1',
-                'gb',
-                LucideIcons.hardDrive,
-                Colors.white,
-              ),
-              const SizedBox(height: 32),
-              const Text(
-                'active containers',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 16),
-              Expanded(
-                child: ListView.builder(
-                  itemCount: containers.length,
-                  itemBuilder: (context, index) {
-                    final container = containers[index];
-                    final name = container['name'] ?? 'Unknown';
-                    final cCpu = container['cpuPercent'] ?? 0.0;
-                    final cMem = container['memUsageMB'] ?? 0.0;
-
-                    final cCpuStr = (cCpu is num) ? cCpu.toStringAsFixed(1) : '0.0';
-                    final cMemStr = (cMem is num) ? (cMem / 1024).toStringAsFixed(1) : '0.0'; // Assuming cMem is in MB, convert to GB.
-
-                    return _buildContainerRow(
-                      name, 
-                      cCpuStr, 
-                      cMemStr,
-                      _getUsageColor(cCpu.toDouble()),
-                    );
-                  },
+    return _isLoading
+        ? const Center(child: CircularProgressIndicator(color: Colors.white))
+        : Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(height: 24),
+                const Text(
+                  'system health',
+                  style: TextStyle(fontSize: 32, fontWeight: FontWeight.w900),
                 ),
-              ),
-            ],
-          ),
-        );
+                const SizedBox(height: 24),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildMetricCard(
+                        'CPU',
+                        cpuStr,
+                        '%',
+                        LucideIcons.cpu,
+                        _getUsageColor(cpuVal.toDouble()),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: _buildMetricCard(
+                        'RAM',
+                        memStr,
+                        'gb',
+                        LucideIcons.memoryStick,
+                        _getUsageColor(
+                          (memVal.toDouble() / 16000.0) * 100,
+                        ), // Assuming 16GB total for color scaling
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                _buildMetricCard(
+                  'STORAGE',
+                  '45.1',
+                  'gb',
+                  LucideIcons.hardDrive,
+                  Colors.white,
+                ),
+                const SizedBox(height: 32),
+                const Text(
+                  'active containers',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 16),
+                Expanded(
+                  child: ListView.builder(
+                    itemCount: containers.length,
+                    itemBuilder: (context, index) {
+                      final container = containers[index];
+                      final name = container['name'] ?? 'Unknown';
+                      final cCpu = container['cpuPercent'] ?? 0.0;
+                      final cMem = container['memUsageMB'] ?? 0.0;
+
+                      final cCpuStr = (cCpu is num)
+                          ? cCpu.toStringAsFixed(1)
+                          : '0.0';
+                      final cMemStr = (cMem is num)
+                          ? (cMem / 1024).toStringAsFixed(1)
+                          : '0.0'; // Assuming cMem is in MB, convert to GB.
+
+                      return _buildContainerRow(
+                        name,
+                        cCpuStr,
+                        cMemStr,
+                        _getUsageColor(cCpu.toDouble()),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          );
   }
 
   Widget _buildMetricCard(
@@ -1785,10 +3139,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  name,
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
+                Text(name, style: const TextStyle(fontWeight: FontWeight.bold)),
                 const SizedBox(height: 4),
                 Row(
                   children: [
@@ -1829,22 +3180,53 @@ class _CreateAgentScreenState extends State<CreateAgentScreen> {
   late TextEditingController _tokenCtrl;
   String _provider = 'openrouter';
   String _platform = 'hermitchat';
+  String _background = 'doodle';
   String? _profilePicUrl;
   String? _bannerUrl;
   bool _isDeploying = false;
+  bool _isResetting = false;
+  bool _isDeleting = false;
   final ImagePicker _picker = ImagePicker();
+
+  static const List<Map<String, String>> _backgrounds = [
+    {'id': 'doodle', 'name': 'Doodle', 'desc': 'Planes, crescents & waves'},
+    {'id': 'minimal', 'name': 'Minimal', 'desc': 'Subtle diagonal lines'},
+    {'id': 'gradient', 'name': 'Gradient', 'desc': 'Dark purple-teal glow'},
+    {'id': 'grid', 'name': 'Grid', 'desc': 'Dot-grid pattern'},
+    {'id': 'dots', 'name': 'Dots', 'desc': 'Staggered polka dots'},
+    {'id': 'waves', 'name': 'Waves', 'desc': 'Horizontal wave lines'},
+    {'id': 'hexagon', 'name': 'Hexagon', 'desc': 'Honeycomb grid'},
+    {'id': 'circuit', 'name': 'Circuit', 'desc': 'PCB trace lines'},
+    {'id': 'aurora', 'name': 'Aurora', 'desc': 'Northern lights'},
+  ];
 
   @override
   void initState() {
     super.initState();
     _nameCtrl = TextEditingController(text: widget.existingAgent?.name ?? '');
     _roleCtrl = TextEditingController(text: widget.existingAgent?.role ?? '');
-    _personalityCtrl = TextEditingController(text: widget.existingAgent?.personality ?? '');
+    _personalityCtrl = TextEditingController(
+      text: widget.existingAgent?.personality ?? '',
+    );
     _modelCtrl = TextEditingController(text: widget.existingAgent?.model ?? '');
-    _tokenCtrl = TextEditingController(); // Token usually not returned for security
-    _provider = 'openrouter';
+    _tokenCtrl =
+        TextEditingController(); // Token usually not returned for security
+    _provider = widget.existingAgent?.provider ?? 'openrouter';
     _platform = widget.existingAgent?.platform ?? 'hermitchat';
+    _background = widget.existingAgent?.background ?? 'doodle';
     _profilePicUrl = widget.existingAgent?.profilePic;
+    _loadSavedBackground();
+  }
+
+  Future<void> _loadSavedBackground() async {
+    final existingAgent = widget.existingAgent;
+    if (existingAgent == null) return;
+    final background = await ChatBackgroundPreferences.resolve(
+      existingAgent.id,
+      existingAgent.background,
+    );
+    if (!mounted) return;
+    setState(() => _background = background);
   }
 
   Future<void> _pickImage(bool isProfile) async {
@@ -1872,7 +3254,7 @@ class _CreateAgentScreenState extends State<CreateAgentScreen> {
     }
 
     setState(() => _isDeploying = true);
-    
+
     final payload = {
       'name': _nameCtrl.text.trim(),
       'role': _roleCtrl.text.trim(),
@@ -1882,6 +3264,7 @@ class _CreateAgentScreenState extends State<CreateAgentScreen> {
       'platform': _platform,
       'profilePic': _profilePicUrl ?? '',
       'bannerUrl': _bannerUrl ?? '',
+      'background': _background,
     };
 
     if (_platform == 'telegram') {
@@ -1889,22 +3272,140 @@ class _CreateAgentScreenState extends State<CreateAgentScreen> {
     }
 
     bool success = false;
+    String? savedAgentId;
     if (widget.existingAgent != null) {
-      success = await ApiService().updateAgent(widget.existingAgent!.id, payload);
+      success = await ApiService().updateAgent(
+        widget.existingAgent!.id,
+        payload,
+      );
+      if (success) {
+        savedAgentId = widget.existingAgent!.id;
+      }
     } else {
       final result = await ApiService().createAgent(payload);
       success = result != null && result['success'] == true;
+      if (success && result['id'] != null) {
+        savedAgentId = result['id'].toString();
+      }
     }
-    
+
     if (!mounted) return;
     setState(() => _isDeploying = false);
 
     if (success) {
+      if (savedAgentId != null) {
+        await ChatBackgroundPreferences.save(savedAgentId, _background);
+      }
+      if (!mounted) return;
       Navigator.pop(context);
     } else {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Deployment/Update failed')));
+    }
+  }
+
+  void _handleResetContainer() async {
+    if (widget.existingAgent == null) return;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF18181B),
+        title: const Text(
+          'Reset Container',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: const Text(
+          'Are you sure you want to reset the container? This will restart the agent\'s workspace.',
+          style: TextStyle(color: Color(0xFFA1A1AA)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Reset', style: TextStyle(color: Colors.orange)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    setState(() => _isResetting = true);
+
+    final containerId = widget.existingAgent!.containerId.isEmpty
+        ? 'agent-${widget.existingAgent!.name.toLowerCase()}'
+        : widget.existingAgent!.containerId;
+
+    final success = await ApiService().resetContainer(containerId);
+
+    if (!mounted) return;
+    setState(() => _isResetting = false);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          success
+              ? 'Container reset successfully'
+              : 'Failed to reset container',
+        ),
+      ),
+    );
+  }
+
+  void _handleDeleteAgent() async {
+    if (widget.existingAgent == null) return;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF18181B),
+        title: const Text(
+          'Delete Agent',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: const Text(
+          'Are you sure you want to delete this agent? This action cannot be undone.',
+          style: TextStyle(color: Color(0xFFA1A1AA)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text(
+              'Delete',
+              style: TextStyle(color: Colors.redAccent),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    setState(() => _isDeleting = true);
+
+    final success = await ApiService().deleteAgent(widget.existingAgent!.id);
+
+    if (!mounted) return;
+    setState(() => _isDeleting = false);
+
+    if (success) {
+      Navigator.pop(context);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Deployment/Update failed')),
+        const SnackBar(content: Text('Agent deleted successfully')),
       );
+    } else {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Failed to delete agent')));
     }
   }
 
@@ -1914,8 +3415,13 @@ class _CreateAgentScreenState extends State<CreateAgentScreen> {
       backgroundColor: Colors.black,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
-        title: Text(widget.existingAgent != null ? 'configure agent' : 'new deployment', 
-          style: const TextStyle(fontWeight: FontWeight.w900, color: Colors.white)),
+        title: Text(
+          widget.existingAgent != null ? 'configure agent' : 'new deployment',
+          style: const TextStyle(
+            fontWeight: FontWeight.w900,
+            color: Colors.white,
+          ),
+        ),
         leading: IconButton(
           icon: const Icon(LucideIcons.arrowLeft, color: Colors.white),
           onPressed: () => Navigator.pop(context),
@@ -1932,44 +3438,72 @@ class _CreateAgentScreenState extends State<CreateAgentScreen> {
                 child: CircleAvatar(
                   radius: 50,
                   backgroundColor: const Color(0xFF1A1A1A),
-                  backgroundImage: _profilePicUrl != null 
-                    ? NetworkImage('${ApiService().baseUrl}$_profilePicUrl') 
-                    : null,
-                  child: _profilePicUrl == null 
-                    ? const Icon(LucideIcons.camera, color: Colors.white) 
-                    : null,
+                  backgroundImage: _profilePicUrl != null
+                      ? NetworkImage('${ApiService().baseUrl}$_profilePicUrl')
+                      : null,
+                  child: _profilePicUrl == null
+                      ? const Icon(LucideIcons.camera, color: Colors.white)
+                      : null,
                 ),
               ),
             ),
             const SizedBox(height: 8),
-            const Center(child: Text('tap to change profile pic', style: TextStyle(color: Colors.grey, fontSize: 12))),
-            
+            const Center(
+              child: Text(
+                'tap to change profile pic',
+                style: TextStyle(color: Colors.grey, fontSize: 12),
+              ),
+            ),
+
             _buildSectionTitle('identity'),
             _buildTextField(_nameCtrl, 'Agent Name', 'e.g. Ralph'),
             _buildTextField(_roleCtrl, 'Role', 'e.g. Code Assistant'),
-            _buildTextField(_personalityCtrl, 'Personality', 'e.g. Concise and helpful'),
-            
+            _buildTextField(
+              _personalityCtrl,
+              'Personality',
+              'e.g. Concise and helpful',
+            ),
+
             _buildSectionTitle('provider'),
             _buildChoiceChip('openrouter', 'OpenRouter (Free)'),
             _buildChoiceChip('openai', 'OpenAI'),
             _buildChoiceChip('anthropic', 'Anthropic'),
             _buildChoiceChip('gemini', 'Google Gemini'),
-            _buildTextField(_modelCtrl, 'Specific Model', 'e.g. gemini-2.0-flash-exp'),
-            
+            _buildTextField(
+              _modelCtrl,
+              'Specific Model',
+              'e.g. gemini-2.0-flash-exp',
+            ),
+
             _buildSectionTitle('platform'),
             Row(
               children: [
-                Expanded(child: _buildPlatformChip('hermitchat', 'HermitChat', LucideIcons.messageSquare)),
+                Expanded(
+                  child: _buildPlatformChip(
+                    'hermitchat',
+                    'HermitChat',
+                    LucideIcons.messageSquare,
+                  ),
+                ),
                 const SizedBox(width: 12),
-                Expanded(child: _buildPlatformChip('telegram', 'Telegram', LucideIcons.send)),
+                Expanded(
+                  child: _buildPlatformChip(
+                    'telegram',
+                    'Telegram',
+                    LucideIcons.send,
+                  ),
+                ),
               ],
             ),
-            
+
             if (_platform == 'telegram') ...[
               const SizedBox(height: 16),
               _buildTextField(_tokenCtrl, 'Bot Token', '123456:BC...'),
             ],
-            
+
+            _buildSectionTitle('chat background'),
+            _buildBackgroundPicker(),
+
             const SizedBox(height: 48),
             SizedBox(
               width: double.infinity,
@@ -1979,14 +3513,86 @@ class _CreateAgentScreenState extends State<CreateAgentScreen> {
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.white,
                   foregroundColor: Colors.black,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(28),
+                  ),
                 ),
-                child: _isDeploying 
-                  ? const CircularProgressIndicator(color: Colors.black)
-                  : Text(widget.existingAgent != null ? 'save changes' : 'deploy agent', 
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                child: _isDeploying
+                    ? const CircularProgressIndicator(color: Colors.black)
+                    : Text(
+                        widget.existingAgent != null
+                            ? 'save changes'
+                            : 'deploy agent',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
+                      ),
               ),
             ),
+            if (widget.existingAgent != null) ...[
+              const SizedBox(height: 24),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _isResetting ? null : _handleResetContainer,
+                      icon: _isResetting
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Icon(LucideIcons.rotateCcw, size: 16),
+                      label: const Text('Reset Container'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white,
+                        side: const BorderSide(color: Color(0xFF27272A)),
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _isDeleting ? null : _handleDeleteAgent,
+                      icon: _isDeleting
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.red,
+                              ),
+                            )
+                          : const Icon(
+                              LucideIcons.trash2,
+                              size: 16,
+                              color: Colors.redAccent,
+                            ),
+                      label: const Text(
+                        'Delete Agent',
+                        style: TextStyle(color: Colors.redAccent),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.redAccent,
+                        side: const BorderSide(color: Colors.redAccent),
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ],
         ),
       ),
@@ -1998,12 +3604,21 @@ class _CreateAgentScreenState extends State<CreateAgentScreen> {
       padding: const EdgeInsets.only(top: 24, bottom: 12),
       child: Text(
         title.toLowerCase(),
-        style: const TextStyle(color: Colors.grey, fontWeight: FontWeight.bold, fontSize: 14, letterSpacing: 1.2),
+        style: const TextStyle(
+          color: Colors.grey,
+          fontWeight: FontWeight.bold,
+          fontSize: 14,
+          letterSpacing: 1.2,
+        ),
       ),
     );
   }
 
-  Widget _buildTextField(TextEditingController ctrl, String label, String hint) {
+  Widget _buildTextField(
+    TextEditingController ctrl,
+    String label,
+    String hint,
+  ) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
       child: TextField(
@@ -2015,8 +3630,14 @@ class _CreateAgentScreenState extends State<CreateAgentScreen> {
           hintStyle: const TextStyle(color: Color(0xFF27272A)),
           filled: true,
           fillColor: const Color(0xFF09090B),
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: Color(0xFF27272A))),
-          enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: Color(0xFF27272A))),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(16),
+            borderSide: const BorderSide(color: Color(0xFF27272A)),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(16),
+            borderSide: const BorderSide(color: Color(0xFF27272A)),
+          ),
         ),
       ),
     );
@@ -2033,9 +3654,17 @@ class _CreateAgentScreenState extends State<CreateAgentScreen> {
         decoration: BoxDecoration(
           color: isSelected ? Colors.white : const Color(0xFF09090B),
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: isSelected ? Colors.white : const Color(0xFF27272A)),
+          border: Border.all(
+            color: isSelected ? Colors.white : const Color(0xFF27272A),
+          ),
         ),
-        child: Text(label, style: TextStyle(color: isSelected ? Colors.black : Colors.white, fontWeight: isSelected ? FontWeight.bold : FontWeight.normal)),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: isSelected ? Colors.black : Colors.white,
+            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+          ),
+        ),
       ),
     );
   }
@@ -2049,19 +3678,134 @@ class _CreateAgentScreenState extends State<CreateAgentScreen> {
         decoration: BoxDecoration(
           color: isSelected ? Colors.white : const Color(0xFF09090B),
           borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: isSelected ? Colors.white : const Color(0xFF27272A)),
+          border: Border.all(
+            color: isSelected ? Colors.white : const Color(0xFF27272A),
+          ),
         ),
         child: Column(
           children: [
             Icon(icon, color: isSelected ? Colors.black : Colors.white),
             const SizedBox(height: 8),
-            Text(label, style: TextStyle(color: isSelected ? Colors.black : Colors.white, fontWeight: isSelected ? FontWeight.bold : FontWeight.normal)),
+            Text(
+              label,
+              style: TextStyle(
+                color: isSelected ? Colors.black : Colors.white,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+              ),
+            ),
           ],
         ),
       ),
     );
   }
+
+  /// Background picker for the chat screen.
+  /// Shows a scrollable grid of labelled previews.
+  /// Ref: docs/chat_backgrounds.md
+  Widget _buildBackgroundPicker() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Preview',
+          style: TextStyle(color: Colors.grey[600], fontSize: 12),
+        ),
+        const SizedBox(height: 12),
+        // Preview box of selected background
+        ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: SizedBox(
+            height: 140,
+            child: CustomPaint(
+              painter: ChatBackgroundPainter.forId(_background),
+              size: Size.infinite,
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 3,
+            childAspectRatio: 1.5,
+            crossAxisSpacing: 10,
+            mainAxisSpacing: 10,
+          ),
+          itemCount: _backgrounds.length,
+          itemBuilder: (context, index) {
+            final bg = _backgrounds[index];
+            final isSelected = _background == bg['id'];
+            return GestureDetector(
+              onTap: () => setState(() => _background = bg['id']!),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: isSelected ? Colors.white : const Color(0xFF27272A),
+                    width: isSelected ? 2 : 1,
+                  ),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(11),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      CustomPaint(
+                        painter: ChatBackgroundPainter.forId(bg['id']!),
+                        size: Size.infinite,
+                      ),
+                      // Overlay label at the bottom
+                      Positioned(
+                        bottom: 0,
+                        left: 0,
+                        right: 0,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                Colors.transparent,
+                                Colors.black.withValues(alpha: 0.8),
+                              ],
+                            ),
+                          ),
+                          child: Text(
+                            bg['name']!,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              fontSize: 10,
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                      if (isSelected)
+                        const Positioned(
+                          top: 6,
+                          right: 6,
+                          child: Icon(
+                            Icons.check_circle,
+                            color: Colors.white,
+                            size: 18,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      ],
+    );
+  }
 }
+
 
 class SettingsScreen extends StatefulWidget {
   final VoidCallback onLogout;
@@ -2108,7 +3852,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (data != null && mounted) {
       setState(() {
         try {
-          final rawUtcStr = (data['serverUtcTime'] ?? data['datetime'] ?? data['time']).toString();
+          final rawUtcStr =
+              (data['serverUtcTime'] ?? data['datetime'] ?? data['time'])
+                  .toString();
           _serverUtcTime = DateTime.parse(rawUtcStr);
           _timeOffset = data['offset']?.toString() ?? '0';
           _pendingOffset = _timeOffset;
@@ -2153,7 +3899,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final settings = await api.getSettings();
       if (settings != null && mounted) {
         setState(() {
-          _tunnelEnabled = settings['tunnelEnabled'] == true || settings['tunnelEnabled'] == 'true';
+          _tunnelEnabled =
+              settings['tunnelEnabled'] == true ||
+              settings['tunnelEnabled'] == 'true';
           _tunnelUrl = settings['tunnelURL'] ?? '';
           _timeOffset = settings['timeOffset']?.toString() ?? '0';
           _openrouterController.text = settings['openrouterKey'] ?? '';
@@ -2263,14 +4011,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               Switch(
                 value: _tunnelEnabled,
-                activeTrackColor: const Color(0xFF10B981).withValues(alpha: 0.5),
+                activeTrackColor: const Color(
+                  0xFF10B981,
+                ).withValues(alpha: 0.5),
                 activeThumbColor: const Color(0xFF10B981),
                 onChanged: _isLoading
                     ? null
                     : (val) async {
                         setState(() => _isLoading = true);
-                        final success = await ApiService()
-                            .updateSettings({'tunnelEnabled': val});
+                        final success = await ApiService().updateSettings({
+                          'tunnelEnabled': val,
+                        });
                         if (success) {
                           setState(() {
                             _tunnelEnabled = val;
@@ -2299,7 +4050,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               child: Row(
                 children: [
-                  const Icon(LucideIcons.link, size: 16, color: Color(0xFF10B981)),
+                  const Icon(
+                    LucideIcons.link,
+                    size: 16,
+                    color: Color(0xFF10B981),
+                  ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
@@ -2334,44 +4089,50 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 16),
           _buildTextField(
-            'OpenAI API Key', 
-            'sk-...', 
-            obscure: true, 
-            controller: _openaiController
+            'OpenAI API Key',
+            'sk-...',
+            obscure: true,
+            controller: _openaiController,
           ),
           const SizedBox(height: 16),
           _buildTextField(
-            'Anthropic API Key', 
-            'sk-ant-...', 
-            obscure: true, 
-            controller: _anthropicController
+            'Anthropic API Key',
+            'sk-ant-...',
+            obscure: true,
+            controller: _anthropicController,
           ),
           const SizedBox(height: 16),
           _buildTextField(
-            'Gemini API Key', 
-            'AIza...', 
-            obscure: true, 
-            controller: _geminiController
+            'Gemini API Key',
+            'AIza...',
+            obscure: true,
+            controller: _geminiController,
           ),
           const SizedBox(height: 24),
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(
-              onPressed: _isLoading ? null : () async {
-                setState(() => _isSavingKeys = true);
-                final success = await ApiService().updateSettings({
-                  'openrouterKey': _openrouterController.text,
-                  'openaiKey': _openaiController.text,
-                  'anthropicKey': _anthropicController.text,
-                  'geminiKey': _geminiController.text,
-                });
-                if (mounted) {
-                  setState(() => _isSavingKeys = false);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text(success ? 'API Keys updated' : 'Update failed')),
-                  );
-                }
-              },
+              onPressed: _isLoading
+                  ? null
+                  : () async {
+                      setState(() => _isSavingKeys = true);
+                      final success = await ApiService().updateSettings({
+                        'openrouterKey': _openrouterController.text,
+                        'openaiKey': _openaiController.text,
+                        'anthropicKey': _anthropicController.text,
+                        'geminiKey': _geminiController.text,
+                      });
+                      if (mounted) {
+                        setState(() => _isSavingKeys = false);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              success ? 'API Keys updated' : 'Update failed',
+                            ),
+                          ),
+                        );
+                      }
+                    },
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.white,
                 foregroundColor: Colors.black,
@@ -2380,12 +4141,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   borderRadius: BorderRadius.circular(16),
                 ),
               ),
-              child: _isSavingKeys 
-                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
-                : const Text(
-                    'Save Keys',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
+              child: _isSavingKeys
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.black,
+                      ),
+                    )
+                  : const Text(
+                      'Save Keys',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
             ),
           ),
         ],
@@ -2395,7 +4163,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Widget _buildTimeSettingsSection() {
     final now = _serverTime;
-    final preview = _serverUtcTime?.add(Duration(hours: int.tryParse(_pendingOffset) ?? 0));
+    final preview = _serverUtcTime?.add(
+      Duration(hours: int.tryParse(_pendingOffset) ?? 0),
+    );
 
     String formatTime(DateTime? t) {
       if (t == null) return "--:--:--";
@@ -2403,7 +4173,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final ampm = t.hour >= 12 ? 'PM' : 'AM';
       return "${h.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')} $ampm";
     }
-    
+
     return _buildSectionCard(
       title: 'System Time',
       icon: LucideIcons.clock,
@@ -2436,7 +4206,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
             padding: const EdgeInsets.only(left: 4),
             child: Row(
               children: [
-                const Icon(LucideIcons.globe, size: 12, color: Color(0xFF64748B)),
+                const Icon(
+                  LucideIcons.globe,
+                  size: 12,
+                  color: Color(0xFF64748B),
+                ),
                 const SizedBox(width: 6),
                 Text(
                   'SERVER OFFSET: UTC${int.parse(_timeOffset) >= 0 ? '+' : ''}${_timeOffset}h',
@@ -2520,7 +4294,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               final preset = _timePresets[index];
               final isSelected = _pendingOffset == preset['value'];
               final isCurrent = _timeOffset == preset['value'];
-              
+
               return GestureDetector(
                 onTap: () {
                   setState(() => _pendingOffset = preset['value']!);
@@ -2528,10 +4302,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 200),
                   decoration: BoxDecoration(
-                    color: isSelected ? const Color(0xFF3B82F6) : const Color(0xFF09090B),
+                    color: isSelected
+                        ? const Color(0xFF3B82F6)
+                        : const Color(0xFF09090B),
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(
-                      color: isSelected ? const Color(0xFF3B82F6) : (isCurrent ? const Color(0xFF10B981) : const Color(0xFF27272A)),
+                      color: isSelected
+                          ? const Color(0xFF3B82F6)
+                          : (isCurrent
+                                ? const Color(0xFF10B981)
+                                : const Color(0xFF27272A)),
                       width: isSelected || isCurrent ? 2 : 1,
                     ),
                   ),
@@ -2564,22 +4344,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: _isLoading || _isSaving ? null : () async {
-                  setState(() => _isSaving = true);
-                  final success = await ApiService().updateSettings({'timeOffset': _pendingOffset});
-                  if (success) {
-                    await _syncTime();
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('System time synchronized')),
-                      );
-                    }
-                  }
-                  if (mounted) setState(() => _isSaving = false);
-                },
-                icon: _isSaving 
-                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : const Icon(LucideIcons.save, size: 16),
+                onPressed: _isLoading || _isSaving
+                    ? null
+                    : () async {
+                        setState(() => _isSaving = true);
+                        final success = await ApiService().updateSettings({
+                          'timeOffset': _pendingOffset,
+                        });
+                        if (success) {
+                          await _syncTime();
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('System time synchronized'),
+                              ),
+                            );
+                          }
+                        }
+                        if (mounted) setState(() => _isSaving = false);
+                      },
+                icon: _isSaving
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(LucideIcons.save, size: 16),
                 label: const Text(
                   'Save Sync',
                   style: TextStyle(fontWeight: FontWeight.bold),
@@ -2608,10 +4401,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: isActive ? color.withValues(alpha: 0.1) : const Color(0xFF0F172A),
+        color: isActive
+            ? color.withValues(alpha: 0.1)
+            : const Color(0xFF0F172A),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: isActive ? color.withValues(alpha: 0.3) : const Color(0xFF1E293B),
+          color: isActive
+              ? color.withValues(alpha: 0.3)
+              : const Color(0xFF1E293B),
         ),
       ),
       child: Column(
@@ -2651,25 +4448,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
       child: Column(
         children: [
           _buildTextField(
-            'New Username', 
-            'Enter new username', 
-            obscure: false, 
-            controller: _usernameController
+            'New Username',
+            'Enter new username',
+            obscure: false,
+            controller: _usernameController,
           ),
           const SizedBox(height: 16),
           _buildTextField(
-            'New Password', 
-            'Enter new password', 
-            obscure: true, 
-            controller: _passwordController
+            'New Password',
+            'Enter new password',
+            obscure: true,
+            controller: _passwordController,
           ),
           const SizedBox(height: 24),
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(
-              onPressed: _isLoading ? null : () async {
-                // Implement creditial update logic if needed
-              },
+              onPressed: _isLoading
+                  ? null
+                  : () async {
+                      // Implement creditial update logic if needed
+                    },
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.white,
                 foregroundColor: Colors.black,
@@ -2689,8 +4488,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-// Backup & Restore section removed for mobile optimization.
-// Use the Web Dashboard for full backups.
+  // Backup & Restore section removed for mobile optimization.
+  // Use the Web Dashboard for full backups.
 
   Widget _buildSessionSection() {
     return _buildSectionCard(
@@ -2718,7 +4517,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildTextField(String label, String hint, {required bool obscure, TextEditingController? controller}) {
+  Widget _buildTextField(
+    String label,
+    String hint, {
+    required bool obscure,
+    TextEditingController? controller,
+  }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2802,7 +4606,11 @@ class _AppsScreenState extends State<AppsScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(LucideIcons.layoutGrid, size: 48, color: Color(0xFF52525B)),
+            const Icon(
+              LucideIcons.layoutGrid,
+              size: 48,
+              color: Color(0xFF52525B),
+            ),
             const SizedBox(height: 16),
             Text(
               'No apps found',
@@ -2844,13 +4652,19 @@ class _AppsScreenState extends State<AppsScreen> {
                   ),
                   title: Text(
                     app['name'],
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 18,
+                    ),
                   ),
                   subtitle: Text(
                     'Agent: ${app['agentName']} | Container: ${app['containerId']}',
                     style: const TextStyle(color: Colors.grey),
                   ),
-                  trailing: const Icon(LucideIcons.chevronRight, color: Colors.grey),
+                  trailing: const Icon(
+                    LucideIcons.chevronRight,
+                    color: Colors.grey,
+                  ),
                   onTap: () {
                     Navigator.push(
                       context,
