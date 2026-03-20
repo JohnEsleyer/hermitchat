@@ -1172,9 +1172,15 @@ class _ChatScreenState extends State<ChatScreen> {
   // Available slash commands with descriptions shown in the palette
   // Ref: docs/commands.md
   static const List<Map<String, String>> _commands = [
-    {'command': '/status', 'description': 'Show server reachability & LLM config — no AI needed'},
-    {'command': '/reset',  'description': 'Restart the agent Docker container'},
-    {'command': '/clear',  'description': 'Clear full conversation & context window'},
+    {
+      'command': '/status',
+      'description': 'Show server reachability & LLM config — no AI needed',
+    },
+    {'command': '/reset', 'description': 'Restart the agent Docker container'},
+    {
+      'command': '/clear',
+      'description': 'Clear full conversation & context window',
+    },
   ];
 
   /// Returns the subset of commands that match the current input (search filter).
@@ -1344,10 +1350,14 @@ class _ChatScreenState extends State<ChatScreen> {
     final buffer = StringBuffer();
     buffer.writeln('=== /status report ===');
     buffer.writeln();
-    buffer.writeln('🌐 Server: ${serverReachable ? "✅ Reachable" : "❌ Unreachable"} (${api.baseUrl ?? "not configured"})') ;
+    buffer.writeln(
+      '🌐 Server: ${serverReachable ? "✅ Reachable" : "❌ Unreachable"} (${api.baseUrl ?? "not configured"})',
+    );
     buffer.writeln();
     buffer.writeln('🤖 LLM Provider : $llmProvider');
-    buffer.writeln('🔑 LLM API Key  : ${llmConfigured ? "✅ Configured" : "⚠️ Missing — add it in Settings → API Keys"}');
+    buffer.writeln(
+      '🔑 LLM API Key  : ${llmConfigured ? "✅ Configured" : "⚠️ Missing — add it in Settings → API Keys"}',
+    );
     buffer.writeln();
 
     if (stats != null) {
@@ -1363,7 +1373,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
     buffer.writeln();
     buffer.writeln('📱 Local messages : ${_messages.length}');
-    buffer.write  ('⏰ Timestamp      : ${now.toLocal()}');
+    buffer.write('⏰ Timestamp      : ${now.toLocal()}');
 
     setState(() {
       _messages.add(
@@ -1511,16 +1521,19 @@ class _ChatScreenState extends State<ChatScreen> {
       final prefs = await SharedPreferences.getInstance();
       final key = 'chat_messages_${widget.agent.id}';
       final raw = prefs.getStringList(key) ?? [];
-      final loaded = raw.map((s) {
-        final parts = s.split('|||');
-        if (parts.length < 3) return null;
-        return ChatMessage(
-          role: parts[0],
-          content: parts[1],
-          timestamp: DateTime.tryParse(parts[2]) ?? DateTime.now(),
-          isRead: true,
-        );
-      }).whereType<ChatMessage>().toList();
+      final loaded = raw
+          .map((s) {
+            final parts = s.split('|||');
+            if (parts.length < 3) return null;
+            return ChatMessage(
+              role: parts[0],
+              content: parts[1],
+              timestamp: DateTime.tryParse(parts[2]) ?? DateTime.now(),
+              isRead: true,
+            );
+          })
+          .whereType<ChatMessage>()
+          .toList();
 
       if (loaded.isNotEmpty && mounted) {
         setState(() => _messages.addAll(loaded));
@@ -1542,7 +1555,10 @@ class _ChatScreenState extends State<ChatScreen> {
           ? _messages.sublist(_messages.length - 200)
           : _messages;
       final raw = toStore
-          .map((m) => '${m.role}|||${m.content}|||${m.timestamp.toIso8601String()}')
+          .map(
+            (m) =>
+                '${m.role}|||${m.content}|||${m.timestamp.toIso8601String()}',
+          )
           .toList();
       await prefs.setStringList(key, raw);
     } catch (_) {
@@ -1925,7 +1941,10 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
       body: Stack(
         children: [
-          CustomPaint(painter: _resolveBackgroundPainter(), size: Size.infinite),
+          CustomPaint(
+            painter: _resolveBackgroundPainter(),
+            size: Size.infinite,
+          ),
           Column(
             children: [
               Expanded(
@@ -2194,7 +2213,7 @@ class _ChatScreenState extends State<ChatScreen> {
                           style: TextStyle(color: Colors.white),
                         ),
                         content: const Text(
-                          'When takeover mode is ON, you can directly control the system with commands like <terminal>ls -la</terminal>. The AI agent will not process commands.\n\nWhen OFF (default), only the AI agent can execute commands.',
+                          'When takeover mode is ON, you can directly control the system with commands like <terminal>ls -la</terminal>. The AI agent can not issue commands.\n\nWhen OFF (default), only the AI agent can issue commands.',
                           style: TextStyle(color: Color(0xFFA1A1AA)),
                         ),
                         actions: [
@@ -2322,7 +2341,8 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
               ],
             ),
-            if (_showCommands && _filteredCommands.isNotEmpty) _buildCommandPalette(),
+            if (_showCommands && _filteredCommands.isNotEmpty)
+              _buildCommandPalette(),
           ],
         ),
       ),
@@ -2372,7 +2392,10 @@ class _ChatScreenState extends State<ChatScreen> {
                 child: Row(
                   children: [
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
                       decoration: BoxDecoration(
                         color: const Color(0xFF27272A),
                         borderRadius: BorderRadius.circular(6),
@@ -2666,18 +2689,22 @@ class _GradientBackgroundPainter extends CustomPainter {
     final gradient = LinearGradient(
       begin: Alignment.topLeft,
       end: Alignment.bottomRight,
-      colors: const [
-        Color(0xFF0D0D1A),
-        Color(0xFF0A1628),
-        Color(0xFF091A1A),
-      ],
+      colors: const [Color(0xFF0D0D1A), Color(0xFF0A1628), Color(0xFF091A1A)],
     );
     canvas.drawRect(rect, Paint()..shader = gradient.createShader(rect));
 
     // Soft luminous orbs
     for (final (pos, color, radius) in [
-      (Offset(size.width * 0.15, size.height * 0.25), const Color(0x18673AB7), size.width * 0.5),
-      (Offset(size.width * 0.85, size.height * 0.75), const Color(0x1200BCD4), size.width * 0.55),
+      (
+        Offset(size.width * 0.15, size.height * 0.25),
+        const Color(0x18673AB7),
+        size.width * 0.5,
+      ),
+      (
+        Offset(size.width * 0.85, size.height * 0.75),
+        const Color(0x1200BCD4),
+        size.width * 0.55,
+      ),
     ]) {
       canvas.drawCircle(
         pos,
@@ -2843,12 +2870,20 @@ class _CircuitBackgroundPainter extends CustomPainter {
 
     // Draw horizontal and vertical trace lines
     final segs = [
-      [0.1, 0.2, 0.5, 0.2], [0.5, 0.2, 0.5, 0.5], [0.5, 0.5, 0.9, 0.5],
-      [0.2, 0.4, 0.2, 0.7], [0.2, 0.7, 0.6, 0.7], [0.6, 0.7, 0.6, 0.9],
-      [0.7, 0.1, 0.7, 0.35], [0.7, 0.35, 0.95, 0.35],
-      [0.05, 0.6, 0.35, 0.6], [0.35, 0.6, 0.35, 0.85],
-      [0.4, 0.15, 0.4, 0.4],  [0.4, 0.4, 0.65, 0.4],
-      [0.8, 0.55, 0.8, 0.8],  [0.15, 0.9, 0.55, 0.9],
+      [0.1, 0.2, 0.5, 0.2],
+      [0.5, 0.2, 0.5, 0.5],
+      [0.5, 0.5, 0.9, 0.5],
+      [0.2, 0.4, 0.2, 0.7],
+      [0.2, 0.7, 0.6, 0.7],
+      [0.6, 0.7, 0.6, 0.9],
+      [0.7, 0.1, 0.7, 0.35],
+      [0.7, 0.35, 0.95, 0.35],
+      [0.05, 0.6, 0.35, 0.6],
+      [0.35, 0.6, 0.35, 0.85],
+      [0.4, 0.15, 0.4, 0.4],
+      [0.4, 0.4, 0.65, 0.4],
+      [0.8, 0.55, 0.8, 0.8],
+      [0.15, 0.9, 0.55, 0.9],
     ];
     for (final s in segs) {
       canvas.drawLine(
@@ -2859,8 +2894,14 @@ class _CircuitBackgroundPainter extends CustomPainter {
     }
     // Draw circuit nodes
     for (final n in [
-      [0.5, 0.2], [0.5, 0.5], [0.2, 0.7], [0.6, 0.7],
-      [0.7, 0.35], [0.35, 0.6], [0.4, 0.4], [0.8, 0.55],
+      [0.5, 0.2],
+      [0.5, 0.5],
+      [0.2, 0.7],
+      [0.6, 0.7],
+      [0.7, 0.35],
+      [0.35, 0.6],
+      [0.4, 0.4],
+      [0.8, 0.55],
     ]) {
       canvas.drawCircle(
         Offset(size.width * n[0], size.height * n[1]),
@@ -2884,9 +2925,21 @@ class _AuroraBackgroundPainter extends CustomPainter {
     );
     // Aurora bands
     final bands = [
-      (Offset(size.width * 0.0, size.height * 0.35), const Color(0x18006064), size.width * 0.8),
-      (Offset(size.width * 0.3, size.height * 0.5), const Color(0x12004D40), size.width * 0.9),
-      (Offset(size.width * 0.6, size.height * 0.25), const Color(0x151A237E), size.width * 0.7),
+      (
+        Offset(size.width * 0.0, size.height * 0.35),
+        const Color(0x18006064),
+        size.width * 0.8,
+      ),
+      (
+        Offset(size.width * 0.3, size.height * 0.5),
+        const Color(0x12004D40),
+        size.width * 0.9,
+      ),
+      (
+        Offset(size.width * 0.6, size.height * 0.25),
+        const Color(0x151A237E),
+        size.width * 0.7,
+      ),
     ];
     for (final (center, color, radius) in bands) {
       canvas.drawCircle(
@@ -2916,7 +2969,6 @@ class _AuroraBackgroundPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
-
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -3805,7 +3857,6 @@ class _CreateAgentScreenState extends State<CreateAgentScreen> {
     );
   }
 }
-
 
 class SettingsScreen extends StatefulWidget {
   final VoidCallback onLogout;
