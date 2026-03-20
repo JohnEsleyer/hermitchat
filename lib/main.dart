@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -10,6 +11,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
 import 'api_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
     FlutterLocalNotificationsPlugin();
@@ -285,6 +287,7 @@ class Agent {
   final String containerId;
   final String personality;
   final String provider;
+  final String background;
 
   Agent({
     required this.id,
@@ -297,6 +300,7 @@ class Agent {
     required this.containerId,
     required this.personality,
     this.provider = 'openrouter',
+    this.background = 'doodle',
   });
 
   factory Agent.fromJson(Map<String, dynamic> json) {
@@ -311,6 +315,7 @@ class Agent {
       containerId: json['container_id']?.toString() ?? '',
       personality: json['personality']?.toString() ?? '',
       provider: json['provider']?.toString() ?? 'openrouter',
+      background: json['background']?.toString() ?? 'doodle',
     );
   }
 }
@@ -1110,6 +1115,9 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _takeoverMode = false;
   bool _isSending = false;
   bool _showCommands = false;
+
+  // Offline message store — persisted locally and synced with server
+  // Ref: docs/chat_persistence.md
   final List<ChatMessage> _messages = [];
   StreamSubscription? _wsSubscription;
 
@@ -1118,11 +1126,22 @@ class _ChatScreenState extends State<ChatScreen> {
     multiLine: true,
   );
 
+  // Available slash commands with descriptions shown in the palette
+  // Ref: docs/commands.md
   static const List<Map<String, String>> _commands = [
-    {'command': '/status', 'description': 'Show agent configuration & health'},
-    {'command': '/reset', 'description': 'Restart agent container'},
-    {'command': '/clear', 'description': 'Clear chat context'},
+    {'command': '/status', 'description': 'Show server reachability & LLM config — no AI needed'},
+    {'command': '/reset',  'description': 'Restart the agent Docker container'},
+    {'command': '/clear',  'description': 'Clear full conversation & context window'},
   ];
+
+  /// Returns the subset of commands that match the current input (search filter).
+  List<Map<String, String>> get _filteredCommands {
+    final query = _controller.text.toLowerCase();
+    if (query == '/') return _commands;
+    return _commands
+        .where((c) => c['command']!.toLowerCase().startsWith(query))
+        .toList();
+  }
 
   bool _containsTags(String text) {
     return _tagPattern.hasMatch(text);
@@ -1150,7 +1169,28 @@ class _ChatScreenState extends State<ChatScreen> {
     _scrollToBottom();
   }
 
+  /// Handles slash commands.
+  /// /status is fully DETERMINISTIC — never calls the LLM.
+  /// /clear wipes the local message list AND calls the server to reset context.
+  /// Other commands are sent to the server like a regular message.
+  /// Ref: docs/commands.md
   void _sendCommand(String command) async {
+    // Always close the command palette before processing
+    setState(() => _showCommands = false);
+
+    // ── /status ── deterministic, no LLM required ──────────────────────────
+    if (command.trim() == '/status') {
+      _executeStatusCommand();
+      return;
+    }
+
+    // ── /clear ── clears local conversation + server context ───────────────
+    if (command.trim() == '/clear') {
+      _executeClearCommand();
+      return;
+    }
+
+    // ── Other commands (e.g. /reset) — sent to server ──────────────────────
     setState(() {
       _messages.add(
         ChatMessage(
@@ -1161,6 +1201,7 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       );
     });
+    _persistMessages();
     _scrollToBottom();
 
     final response = await ApiService().sendMessage(
@@ -1189,13 +1230,149 @@ class _ChatScreenState extends State<ChatScreen> {
         _messages.add(
           ChatMessage(
             role: 'system',
-            content: 'Command executed.',
+            content: 'Command sent.',
             timestamp: DateTime.now(),
             isRead: true,
           ),
         );
       });
     }
+    _persistMessages();
+    _scrollToBottom();
+  }
+
+  /// /status is deterministic: checks server reachability, LLM config, context
+  /// token usage and reports all locally — no LLM call needed.
+  void _executeStatusCommand() async {
+    final api = ApiService();
+    final now = DateTime.now();
+
+    // Add the user-issued command to chat
+    setState(() {
+      _messages.add(
+        ChatMessage(
+          role: 'user',
+          content: '/status',
+          timestamp: now,
+          isRead: true,
+        ),
+      );
+    });
+    _scrollToBottom();
+
+    // Check server reachability
+    bool serverReachable = false;
+    try {
+      final metrics = await api.getMetrics();
+      serverReachable = metrics != null;
+    } catch (_) {}
+
+    if (!mounted) return;
+
+    // Check LLM configuration (provider key presence)
+    bool llmConfigured = false;
+    String llmProvider = widget.agent.provider;
+    Map<String, dynamic>? settings;
+    try {
+      settings = await api.getSettings();
+      if (settings != null) {
+        final keyMap = {
+          'openrouter': settings['openrouterKey'],
+          'openai': settings['openaiKey'],
+          'anthropic': settings['anthropicKey'],
+          'gemini': settings['geminiKey'],
+        };
+        final key = keyMap[llmProvider];
+        llmConfigured = key != null && key.toString().isNotEmpty;
+      }
+    } catch (_) {}
+
+    if (!mounted) return;
+
+    // Fetch agent stats for context window info
+    Map<String, dynamic>? stats;
+    try {
+      stats = await api.getAgentStats(widget.agent.id.toString());
+    } catch (_) {}
+
+    if (!mounted) return;
+
+    // Build the deterministic status report
+    final buffer = StringBuffer();
+    buffer.writeln('=== /status report ===');
+    buffer.writeln();
+    buffer.writeln('🌐 Server: ${serverReachable ? "✅ Reachable" : "❌ Unreachable"} (${api.baseUrl ?? "not configured"})') ;
+    buffer.writeln();
+    buffer.writeln('🤖 LLM Provider : $llmProvider');
+    buffer.writeln('🔑 LLM API Key  : ${llmConfigured ? "✅ Configured" : "⚠️ Missing — add it in Settings → API Keys"}');
+    buffer.writeln();
+
+    if (stats != null) {
+      final tokens = stats['tokenEstimate'] ?? stats['tokens'] ?? 'N/A';
+      final ctxWindow = stats['contextWindow'] ?? 'N/A';
+      final calls = stats['llmApiCalls'] ?? 'N/A';
+      buffer.writeln('📊 Context Window : $ctxWindow tokens');
+      buffer.writeln('🔢 Token Estimate : $tokens');
+      buffer.writeln('📡 LLM API Calls  : $calls');
+    } else {
+      buffer.writeln('📊 Context stats  : unavailable');
+    }
+
+    buffer.writeln();
+    buffer.writeln('📱 Local messages : ${_messages.length}');
+    buffer.write  ('⏰ Timestamp      : ${now.toLocal()}');
+
+    setState(() {
+      _messages.add(
+        ChatMessage(
+          role: 'system',
+          content: buffer.toString(),
+          timestamp: DateTime.now(),
+          isRead: true,
+        ),
+      );
+    });
+    _persistMessages();
+    _scrollToBottom();
+  }
+
+  /// /clear — wipes local message list and calls server to reset agent context.
+  void _executeClearCommand() async {
+    // Add confirmation message first
+    setState(() {
+      _messages.add(
+        ChatMessage(
+          role: 'user',
+          content: '/clear',
+          timestamp: DateTime.now(),
+          isRead: true,
+        ),
+      );
+    });
+    _scrollToBottom();
+
+    // Call server to clear context
+    final response = await ApiService().sendMessage(
+      widget.agent.id.toString(),
+      '/clear',
+    );
+    if (!mounted) return;
+
+    // Clear local messages and update persisted copy
+    setState(() {
+      _messages.clear();
+      _messages.add(
+        ChatMessage(
+          role: 'system',
+          content: response != null
+              ? '✅ Conversation cleared. Context window reset.'
+              : '✅ Local conversation cleared. (Server may be offline.)',
+          timestamp: DateTime.now(),
+          isRead: true,
+        ),
+      );
+    });
+    _persistMessages();
     _scrollToBottom();
   }
 
@@ -1240,14 +1417,16 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    // Load persisted offline copy of conversation
     _loadMessages();
 
+    // Listen for incoming WebSocket messages (real-time sync)
     _wsSubscription = ApiService().messageStream.listen((data) {
       if (!mounted) return;
       if (data['type'] == 'new_message' &&
           data['agent_id'].toString() == widget.agent.id.toString()) {
         setState(() {
-          // Check if message already exists
+          // Deduplicate: only add if not already present
           if (!_messages.any(
             (m) => m.content == data['content'] && m.role == data['role'],
           )) {
@@ -1259,6 +1438,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 isRead: true,
               ),
             );
+            _persistMessages();
             _scrollToBottom();
           }
         });
@@ -1270,9 +1450,50 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  /// Loads persisted messages from SharedPreferences (offline copy).
+  /// This ensures the conversation survives app restarts and network outages.
   Future<void> _loadMessages() async {
-    // We could fetch actual history here if we had an endpoint for it in ApiService
-    // For now, it's enough to clear and wait for new ones or we can mock it
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = 'chat_messages_${widget.agent.id}';
+      final raw = prefs.getStringList(key) ?? [];
+      final loaded = raw.map((s) {
+        final parts = s.split('|||');
+        if (parts.length < 3) return null;
+        return ChatMessage(
+          role: parts[0],
+          content: parts[1],
+          timestamp: DateTime.tryParse(parts[2]) ?? DateTime.now(),
+          isRead: true,
+        );
+      }).whereType<ChatMessage>().toList();
+
+      if (loaded.isNotEmpty && mounted) {
+        setState(() => _messages.addAll(loaded));
+        _scrollToBottom();
+      }
+    } catch (_) {
+      // If loading fails, start with clean slate
+    }
+  }
+
+  /// Persists messages to SharedPreferences for offline availability.
+  /// Auto-syncs — called after every mutation of _messages.
+  Future<void> _persistMessages() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = 'chat_messages_${widget.agent.id}';
+      // Keep the last 200 messages to avoid unbounded growth
+      final toStore = _messages.length > 200
+          ? _messages.sublist(_messages.length - 200)
+          : _messages;
+      final raw = toStore
+          .map((m) => '${m.role}|||${m.content}|||${m.timestamp.toIso8601String()}')
+          .toList();
+      await prefs.setStringList(key, raw);
+    } catch (_) {
+      // Silently ignore persistence errors
+    }
   }
 
   Future<void> _showNotification(String body) async {
@@ -1295,9 +1516,21 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  /// Sends a user message or dispatches a slash-command.
+  /// Closes the command palette and persists messages for offline availability.
   void _sendMessage() async {
     final text = _controller.text.trim();
     if (text.isEmpty || _isSending) return;
+
+    // Close the command palette whenever send is pressed
+    setState(() => _showCommands = false);
+
+    // Dispatch slash commands deterministically
+    if (text.startsWith('/')) {
+      _controller.clear();
+      _sendCommand(text);
+      return;
+    }
 
     if (!_takeoverMode && _containsTags(text)) {
       setState(() {
@@ -1327,6 +1560,7 @@ class _ChatScreenState extends State<ChatScreen> {
       );
       _controller.clear();
     });
+    _persistMessages();
     _scrollToBottom();
 
     final response = await ApiService().sendMessage(
@@ -1368,16 +1602,22 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         );
       } else {
+        // In takeover mode the user is pretending to be the agent.
+        // A network failure does not mean the agent failed — surface a clearer message.
+        final errMsg = _takeoverMode
+            ? 'System: Could not reach the server. Your message was saved locally.'
+            : 'Error: Failed to reach the agent. Message kept locally — will retry when online.';
         _messages.add(
           ChatMessage(
             role: 'system',
-            content: 'Error: Failed to reach the agent.',
+            content: errMsg,
             timestamp: DateTime.now(),
             isRead: true,
           ),
         );
       }
     });
+    _persistMessages();
     _scrollToBottom();
   }
 
@@ -1444,6 +1684,12 @@ class _ChatScreenState extends State<ChatScreen> {
         ).showSnackBar(const SnackBar(content: Text('File upload failed')));
       }
     }
+  }
+
+  /// Returns the background painter based on the agent's saved preference.
+  /// See ChatBackgroundPainter for all available backgrounds.
+  CustomPainter _resolveBackgroundPainter() {
+    return ChatBackgroundPainter.forId(widget.agent.background);
   }
 
   // Deleted duplicate _buildInputArea
@@ -1616,7 +1862,7 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
       body: Stack(
         children: [
-          CustomPaint(painter: _DoodleBackgroundPainter(), size: Size.infinite),
+          CustomPaint(painter: _resolveBackgroundPainter(), size: Size.infinite),
           Column(
             children: [
               Expanded(
@@ -1963,6 +2209,8 @@ class _ChatScreenState extends State<ChatScreen> {
                       maxLines: null,
                       textInputAction: TextInputAction.newline,
                       onChanged: (value) {
+                        // Show palette on '/' and keep it open for search filtering.
+                        // Hide when the text is empty or no longer starts with '/'
                         setState(() {
                           _showCommands = value.startsWith('/');
                         });
@@ -2011,14 +2259,17 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
               ],
             ),
-            if (_showCommands) _buildCommandPalette(),
+            if (_showCommands && _filteredCommands.isNotEmpty) _buildCommandPalette(),
           ],
         ),
       ),
     );
   }
 
+  /// Command palette widget shown when user types '/'.
+  /// Acts as a real-time search filter — e.g. '/re' shows only /reset.
   Widget _buildCommandPalette() {
+    final cmds = _filteredCommands;
     return Container(
       margin: const EdgeInsets.only(top: 8),
       decoration: BoxDecoration(
@@ -2041,12 +2292,14 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
           ),
-          ...List.generate(_commands.length, (index) {
-            final cmd = _commands[index];
+          ...List.generate(cmds.length, (index) {
+            final cmd = cmds[index];
             return InkWell(
               onTap: () {
-                _controller.text = cmd['command']!;
+                // Selecting a command executes it immediately
+                _controller.clear();
                 setState(() => _showCommands = false);
+                _sendCommand(cmd['command']!);
               },
               child: Padding(
                 padding: const EdgeInsets.symmetric(
@@ -2055,12 +2308,20 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
                 child: Row(
                   children: [
-                    Text(
-                      cmd['command']!,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                        fontSize: 14,
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF27272A),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        cmd['command']!,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontFamily: 'monospace',
+                        ),
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -2085,6 +2346,36 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 }
 
+/// Factory for all available chat background painters (dark mode).
+/// Ref: docs/chat_backgrounds.md
+class ChatBackgroundPainter {
+  /// Returns the appropriate CustomPainter for the given background ID.
+  static CustomPainter forId(String id) {
+    switch (id) {
+      case 'minimal':
+        return _MinimalBackgroundPainter();
+      case 'gradient':
+        return _GradientBackgroundPainter();
+      case 'grid':
+        return _GridBackgroundPainter();
+      case 'dots':
+        return _DotsBackgroundPainter();
+      case 'waves':
+        return _WavesBackgroundPainter();
+      case 'hexagon':
+        return _HexagonBackgroundPainter();
+      case 'circuit':
+        return _CircuitBackgroundPainter();
+      case 'aurora':
+        return _AuroraBackgroundPainter();
+      case 'doodle':
+      default:
+        return _DoodleBackgroundPainter();
+    }
+  }
+}
+
+// ─── Doodle (original, WhatsApp-style chat icons) ────────────────────────────
 class _DoodleBackgroundPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
@@ -2109,46 +2400,23 @@ class _DoodleBackgroundPainter extends CustomPainter {
       lightPaint2,
     );
 
-    final lightPaint3 = Paint()
-      ..color = const Color(0x08FFFFFF)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 60);
-    canvas.drawCircle(
-      Offset(size.width * 0.5, size.height * 1.0),
-      size.width * 0.3,
-      lightPaint3,
-    );
-
     final doodlePaint = Paint()
       ..color = const Color(0x14FFFFFF)
       ..strokeWidth = 1.4
       ..style = PaintingStyle.stroke;
 
+    // Chat bubble doodle shapes
     final path1 = Path();
     path1.moveTo(size.width * 0.1, size.height * 0.15);
     path1.lineTo(size.width * 0.3, size.height * 0.15);
-    path1.quadraticBezierTo(
-      size.width * 0.35,
-      size.height * 0.15,
-      size.width * 0.38,
-      size.height * 0.21,
-    );
+    path1.quadraticBezierTo(size.width * 0.35, size.height * 0.15, size.width * 0.38, size.height * 0.21);
     path1.lineTo(size.width * 0.38, size.height * 0.25);
-    path1.quadraticBezierTo(
-      size.width * 0.38,
-      size.height * 0.31,
-      size.width * 0.3,
-      size.height * 0.31,
-    );
+    path1.quadraticBezierTo(size.width * 0.38, size.height * 0.31, size.width * 0.3, size.height * 0.31);
     path1.lineTo(size.width * 0.18, size.height * 0.35);
     path1.lineTo(size.width * 0.12, size.height * 0.4);
     path1.lineTo(size.width * 0.18, size.height * 0.4);
     path1.lineTo(size.width * 0.26, size.height * 0.35);
-    path1.quadraticBezierTo(
-      size.width * 0.26,
-      size.height * 0.31,
-      size.width * 0.3,
-      size.height * 0.31,
-    );
+    path1.quadraticBezierTo(size.width * 0.26, size.height * 0.31, size.width * 0.3, size.height * 0.31);
     canvas.drawPath(path1, doodlePaint);
 
     final rectPaint = Paint()
@@ -2157,12 +2425,7 @@ class _DoodleBackgroundPainter extends CustomPainter {
       ..strokeWidth = 1.4;
     canvas.drawRRect(
       RRect.fromRectAndRadius(
-        Rect.fromLTWH(
-          size.width * 0.65,
-          size.height * 0.08,
-          size.width * 0.09,
-          size.height * 0.09,
-        ),
+        Rect.fromLTWH(size.width * 0.65, size.height * 0.08, size.width * 0.09, size.height * 0.09),
         const Radius.circular(2),
       ),
       rectPaint,
@@ -2177,42 +2440,19 @@ class _DoodleBackgroundPainter extends CustomPainter {
 
     final wavePath = Path();
     wavePath.moveTo(size.width * 0.05, size.height * 0.75);
-    wavePath.quadraticBezierTo(
-      size.width * 0.1,
-      size.height * 0.7,
-      size.width * 0.15,
-      size.height * 0.75,
-    );
-    wavePath.quadraticBezierTo(
-      size.width * 0.2,
-      size.height * 0.8,
-      size.width * 0.25,
-      size.height * 0.75,
-    );
-    wavePath.quadraticBezierTo(
-      size.width * 0.3,
-      size.height * 0.7,
-      size.width * 0.35,
-      size.height * 0.75,
-    );
+    wavePath.quadraticBezierTo(size.width * 0.1, size.height * 0.7, size.width * 0.15, size.height * 0.75);
+    wavePath.quadraticBezierTo(size.width * 0.2, size.height * 0.8, size.width * 0.25, size.height * 0.75);
+    wavePath.quadraticBezierTo(size.width * 0.3, size.height * 0.7, size.width * 0.35, size.height * 0.75);
     canvas.drawPath(wavePath, doodlePaint);
 
     final dotPaint = Paint()..color = const Color(0x14FFFFFF);
-    canvas.drawCircle(
+    for (final offset in [
       Offset(size.width * 0.75, size.height * 0.35),
-      2,
-      dotPaint,
-    );
-    canvas.drawCircle(
       Offset(size.width * 0.35, size.height * 0.1),
-      1.8,
-      dotPaint,
-    );
-    canvas.drawCircle(
       Offset(size.width * 0.15, size.height * 0.55),
-      1.8,
-      dotPaint,
-    );
+    ]) {
+      canvas.drawCircle(offset, 2, dotPaint);
+    }
 
     final checkPath = Path();
     checkPath.moveTo(size.width * 0.55, size.height * 0.75);
@@ -2224,6 +2464,288 @@ class _DoodleBackgroundPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
+
+// ─── Minimal (subtle diagonal lines on pure black) ────────────────────────────
+class _MinimalBackgroundPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      Paint()..color = const Color(0xFF050505),
+    );
+    final p = Paint()
+      ..color = const Color(0x08FFFFFF)
+      ..strokeWidth = 0.8
+      ..style = PaintingStyle.stroke;
+    const step = 28.0;
+    for (double i = -size.height; i < size.width + size.height; i += step) {
+      canvas.drawLine(Offset(i, 0), Offset(i + size.height, size.height), p);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+// ─── Gradient (dark purple-to-teal soft gradient) ─────────────────────────────
+class _GradientBackgroundPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Rect.fromLTWH(0, 0, size.width, size.height);
+    final gradient = LinearGradient(
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+      colors: const [
+        Color(0xFF0D0D1A),
+        Color(0xFF0A1628),
+        Color(0xFF091A1A),
+      ],
+    );
+    canvas.drawRect(rect, Paint()..shader = gradient.createShader(rect));
+
+    // Soft luminous orbs
+    for (final (pos, color, radius) in [
+      (Offset(size.width * 0.15, size.height * 0.25), const Color(0x18673AB7), size.width * 0.5),
+      (Offset(size.width * 0.85, size.height * 0.75), const Color(0x1200BCD4), size.width * 0.55),
+    ]) {
+      canvas.drawCircle(
+        pos,
+        radius,
+        Paint()
+          ..color = color
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 80),
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+// ─── Grid (subtle dot-grid on near-black) ────────────────────────────────────
+class _GridBackgroundPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      Paint()..color = const Color(0xFF080808),
+    );
+    final p = Paint()..color = const Color(0x1AFFFFFF);
+    const gap = 24.0;
+    for (double x = 0; x < size.width; x += gap) {
+      for (double y = 0; y < size.height; y += gap) {
+        canvas.drawCircle(Offset(x, y), 1.2, p);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+// ─── Dots (polka-dot pattern inspired by Telegram) ───────────────────────────
+class _DotsBackgroundPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      Paint()..color = const Color(0xFF0A0A0A),
+    );
+    final p = Paint()..color = const Color(0x20FFFFFF);
+    const gap = 20.0;
+    bool offset = false;
+    for (double y = 0; y < size.height + gap; y += gap) {
+      for (double x = offset ? gap / 2 : 0.0; x < size.width + gap; x += gap) {
+        canvas.drawCircle(Offset(x, y), 1.5, p);
+      }
+      offset = !offset;
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+// ─── Waves (horizontal wave lines, Telegram-inspired) ────────────────────────
+class _WavesBackgroundPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      Paint()..color = const Color(0xFF080810),
+    );
+    final p = Paint()
+      ..color = const Color(0x12FFFFFF)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2;
+    const waveHeight = 14.0;
+    const waveLength = 60.0;
+    const rowGap = 30.0;
+    for (double y = 0; y < size.height + rowGap; y += rowGap) {
+      final path = Path();
+      path.moveTo(0, y);
+      double x = 0;
+      bool up = true;
+      while (x < size.width) {
+        path.quadraticBezierTo(
+          x + waveLength / 2,
+          y + (up ? -waveHeight : waveHeight),
+          x + waveLength,
+          y,
+        );
+        x += waveLength;
+        up = !up;
+      }
+      canvas.drawPath(path, p);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+// ─── Hexagon (honeycomb grid) ─────────────────────────────────────────────────
+class _HexagonBackgroundPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      Paint()..color = const Color(0xFF060608),
+    );
+    final p = Paint()
+      ..color = const Color(0x12FFFFFF)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.8;
+    const r = 22.0;
+    final h = r * 1.732; // sqrt(3) * r
+    final colSpacing = r * 3;
+    final rowSpacing = h;
+    for (double row = 0; row * rowSpacing < size.height + h; row++) {
+      for (double col = 0; col * colSpacing < size.width + colSpacing; col++) {
+        final cx = col * colSpacing + (row.toInt().isOdd ? r * 1.5 : 0);
+        final cy = row * rowSpacing;
+        _drawHex(canvas, Offset(cx, cy), r, p);
+      }
+    }
+  }
+
+  void _drawHex(Canvas canvas, Offset center, double r, Paint p) {
+    final path = Path();
+    for (int i = 0; i < 6; i++) {
+      final angle = (60 * i - 30) * 3.14159 / 180;
+      final x = center.dx + r * (angle == 0 ? 1 : (Math_cos(angle)));
+      final y = center.dy + r * Math_sin(angle);
+      if (i == 0) {
+        path.moveTo(x, y);
+      } else {
+        path.lineTo(x, y);
+      }
+    }
+    path.close();
+    canvas.drawPath(path, p);
+  }
+
+  // Inline trig helpers to avoid dart:math import collision in scope
+  static double Math_sin(double a) => _sin(a);
+  static double Math_cos(double a) => _cos(a);
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+double _sin(double a) => math.sin(a);
+double _cos(double a) => math.cos(a);
+
+// ─── Circuit (PCB trace lines) ────────────────────────────────────────────────
+class _CircuitBackgroundPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      Paint()..color = const Color(0xFF040A08),
+    );
+    final p = Paint()
+      ..color = const Color(0x1810B981)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.0;
+    final nodePaint = Paint()..color = const Color(0x2510B981);
+
+    // Draw horizontal and vertical trace lines
+    final segs = [
+      [0.1, 0.2, 0.5, 0.2], [0.5, 0.2, 0.5, 0.5], [0.5, 0.5, 0.9, 0.5],
+      [0.2, 0.4, 0.2, 0.7], [0.2, 0.7, 0.6, 0.7], [0.6, 0.7, 0.6, 0.9],
+      [0.7, 0.1, 0.7, 0.35], [0.7, 0.35, 0.95, 0.35],
+      [0.05, 0.6, 0.35, 0.6], [0.35, 0.6, 0.35, 0.85],
+      [0.4, 0.15, 0.4, 0.4],  [0.4, 0.4, 0.65, 0.4],
+      [0.8, 0.55, 0.8, 0.8],  [0.15, 0.9, 0.55, 0.9],
+    ];
+    for (final s in segs) {
+      canvas.drawLine(
+        Offset(size.width * s[0], size.height * s[1]),
+        Offset(size.width * s[2], size.height * s[3]),
+        p,
+      );
+    }
+    // Draw circuit nodes
+    for (final n in [
+      [0.5, 0.2], [0.5, 0.5], [0.2, 0.7], [0.6, 0.7],
+      [0.7, 0.35], [0.35, 0.6], [0.4, 0.4], [0.8, 0.55],
+    ]) {
+      canvas.drawCircle(
+        Offset(size.width * n[0], size.height * n[1]),
+        3,
+        nodePaint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+// ─── Aurora (animated-look northern lights gradient) ─────────────────────────
+class _AuroraBackgroundPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      Paint()..color = const Color(0xFF05080F),
+    );
+    // Aurora bands
+    final bands = [
+      (Offset(size.width * 0.0, size.height * 0.35), const Color(0x18006064), size.width * 0.8),
+      (Offset(size.width * 0.3, size.height * 0.5), const Color(0x12004D40), size.width * 0.9),
+      (Offset(size.width * 0.6, size.height * 0.25), const Color(0x151A237E), size.width * 0.7),
+    ];
+    for (final (center, color, radius) in bands) {
+      canvas.drawCircle(
+        center,
+        radius,
+        Paint()
+          ..color = color
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 90),
+      );
+    }
+    // Subtle star dots
+    final starPaint = Paint()..color = const Color(0x25FFFFFF);
+    for (final pos in [
+      Offset(size.width * 0.1, size.height * 0.08),
+      Offset(size.width * 0.3, size.height * 0.15),
+      Offset(size.width * 0.55, size.height * 0.06),
+      Offset(size.width * 0.75, size.height * 0.12),
+      Offset(size.width * 0.9, size.height * 0.07),
+      Offset(size.width * 0.45, size.height * 0.2),
+      Offset(size.width * 0.85, size.height * 0.25),
+      Offset(size.width * 0.15, size.height * 0.3),
+    ]) {
+      canvas.drawCircle(pos, 1.0, starPaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -2487,12 +3009,25 @@ class _CreateAgentScreenState extends State<CreateAgentScreen> {
   late TextEditingController _tokenCtrl;
   String _provider = 'openrouter';
   String _platform = 'hermitchat';
+  String _background = 'doodle';
   String? _profilePicUrl;
   String? _bannerUrl;
   bool _isDeploying = false;
   bool _isResetting = false;
   bool _isDeleting = false;
   final ImagePicker _picker = ImagePicker();
+
+  static const List<Map<String, String>> _backgrounds = [
+    {'id': 'doodle',   'name': 'Doodle',   'desc': 'Chat bubbles & icons'},
+    {'id': 'minimal',  'name': 'Minimal',  'desc': 'Subtle diagonal lines'},
+    {'id': 'gradient', 'name': 'Gradient', 'desc': 'Dark purple-teal glow'},
+    {'id': 'grid',     'name': 'Grid',     'desc': 'Dot-grid pattern'},
+    {'id': 'dots',     'name': 'Dots',     'desc': 'Staggered polka dots'},
+    {'id': 'waves',    'name': 'Waves',    'desc': 'Horizontal wave lines'},
+    {'id': 'hexagon',  'name': 'Hexagon',  'desc': 'Honeycomb grid'},
+    {'id': 'circuit',  'name': 'Circuit',  'desc': 'PCB trace lines'},
+    {'id': 'aurora',   'name': 'Aurora',   'desc': 'Northern lights'},
+  ];
 
   @override
   void initState() {
@@ -2507,6 +3042,7 @@ class _CreateAgentScreenState extends State<CreateAgentScreen> {
         TextEditingController(); // Token usually not returned for security
     _provider = widget.existingAgent?.provider ?? 'openrouter';
     _platform = widget.existingAgent?.platform ?? 'hermitchat';
+    _background = widget.existingAgent?.background ?? 'doodle';
     _profilePicUrl = widget.existingAgent?.profilePic;
   }
 
@@ -2545,6 +3081,7 @@ class _CreateAgentScreenState extends State<CreateAgentScreen> {
       'platform': _platform,
       'profilePic': _profilePicUrl ?? '',
       'bannerUrl': _bannerUrl ?? '',
+      'background': _background,
     };
 
     if (_platform == 'telegram') {
@@ -2770,6 +3307,9 @@ class _CreateAgentScreenState extends State<CreateAgentScreen> {
               _buildTextField(_tokenCtrl, 'Bot Token', '123456:BC...'),
             ],
 
+            _buildSectionTitle('chat background'),
+            _buildBackgroundPicker(),
+
             const SizedBox(height: 48),
             SizedBox(
               width: double.infinity,
@@ -2964,7 +3504,114 @@ class _CreateAgentScreenState extends State<CreateAgentScreen> {
       ),
     );
   }
+
+  /// Background picker for the chat screen.
+  /// Shows a scrollable grid of labelled previews.
+  /// Ref: docs/chat_backgrounds.md
+  Widget _buildBackgroundPicker() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Preview',
+          style: TextStyle(color: Colors.grey[600], fontSize: 12),
+        ),
+        const SizedBox(height: 12),
+        // Preview box of selected background
+        ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: SizedBox(
+            height: 140,
+            child: CustomPaint(
+              painter: ChatBackgroundPainter.forId(_background),
+              size: Size.infinite,
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 3,
+            childAspectRatio: 1.5,
+            crossAxisSpacing: 10,
+            mainAxisSpacing: 10,
+          ),
+          itemCount: _backgrounds.length,
+          itemBuilder: (context, index) {
+            final bg = _backgrounds[index];
+            final isSelected = _background == bg['id'];
+            return GestureDetector(
+              onTap: () => setState(() => _background = bg['id']!),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: isSelected ? Colors.white : const Color(0xFF27272A),
+                    width: isSelected ? 2 : 1,
+                  ),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(11),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      CustomPaint(
+                        painter: ChatBackgroundPainter.forId(bg['id']!),
+                        size: Size.infinite,
+                      ),
+                      // Overlay label at the bottom
+                      Positioned(
+                        bottom: 0,
+                        left: 0,
+                        right: 0,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                Colors.transparent,
+                                Colors.black.withValues(alpha: 0.8),
+                              ],
+                            ),
+                          ),
+                          child: Text(
+                            bg['name']!,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              fontSize: 10,
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                      if (isSelected)
+                        const Positioned(
+                          top: 6,
+                          right: 6,
+                          child: Icon(
+                            Icons.check_circle,
+                            color: Colors.white,
+                            size: 18,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      ],
+    );
+  }
 }
+
 
 class SettingsScreen extends StatefulWidget {
   final VoidCallback onLogout;
