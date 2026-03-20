@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -99,7 +100,38 @@ class CalendarEventModel {
       executed: json['executed'] as bool? ?? false,
     );
   }
+
+  DateTime? get startsAt {
+    if (date.isEmpty) return null;
+    final normalizedTime = time.isEmpty ? '00:00' : time;
+    return DateTime.tryParse('${date}T$normalizedTime:00');
+  }
 }
+
+const List<String> _calendarWeekdays = [
+  'Sun',
+  'Mon',
+  'Tue',
+  'Wed',
+  'Thu',
+  'Fri',
+  'Sat',
+];
+
+const List<String> _calendarMonths = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
 
 class CalendarScreen extends StatefulWidget {
   const CalendarScreen({super.key});
@@ -108,36 +140,302 @@ class CalendarScreen extends StatefulWidget {
   State<CalendarScreen> createState() => _CalendarScreenState();
 }
 
-class _CalendarScreenState extends State<CalendarScreen> {
+class _CalendarScreenState extends State<CalendarScreen>
+    with SingleTickerProviderStateMixin {
+  static const _monthPageAnchor = 600;
+
+  late final TabController _tabController;
+  late final PageController _monthController;
+  final DateTime _today = DateTime.now();
+  DateTime? _selectedDate;
   List<CalendarEventModel> _events = [];
   bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
+    _selectedDate = DateTime(_today.year, _today.month, _today.day);
+    _tabController = TabController(length: 2, vsync: this);
+    _monthController = PageController(initialPage: _monthPageAnchor);
     _loadEvents();
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    _monthController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadEvents() async {
     final data = await ApiService().getCalendarEvents();
-    if (mounted) {
-      setState(() {
-        _events = data.map((e) => CalendarEventModel.fromJson(e)).toList();
-        _events.sort((a, b) {
-          final timeA = a.date + a.time;
-          final timeB = b.date + b.time;
+    if (!mounted) return;
+    setState(() {
+      _events = data.map((e) => CalendarEventModel.fromJson(e)).toList()
+        ..sort((a, b) {
+          final timeA = a.startsAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+          final timeB = b.startsAt ?? DateTime.fromMillisecondsSinceEpoch(0);
           return timeA.compareTo(timeB);
         });
-        _isLoading = false;
-      });
-    }
+      _isLoading = false;
+    });
   }
 
   Future<void> _deleteEvent(int id) async {
     final success = await ApiService().deleteCalendarEvent(id);
     if (success) {
-      _loadEvents();
+      await _loadEvents();
     }
+  }
+
+  DateTime _monthForPage(int page) {
+    final offset = page - _monthPageAnchor;
+    return DateTime(_today.year, _today.month + offset);
+  }
+
+  List<DateTime?> _daysForMonth(DateTime month) {
+    final firstDay = DateTime(month.year, month.month, 1);
+    final daysInMonth = DateTime(month.year, month.month + 1, 0).day;
+    final leadingEmpty = firstDay.weekday % 7;
+    final totalSlots = ((leadingEmpty + daysInMonth) / 7).ceil() * 7;
+    return List<DateTime?>.generate(totalSlots, (index) {
+      final day = index - leadingEmpty + 1;
+      if (day < 1 || day > daysInMonth) {
+        return null;
+      }
+      return DateTime(month.year, month.month, day);
+    });
+  }
+
+  bool _isSameDay(DateTime a, DateTime b) {
+    return a.year == b.year && a.month == b.month && a.day == b.day;
+  }
+
+  List<CalendarEventModel> _eventsForDay(DateTime day) {
+    return _events.where((event) {
+      final startsAt = event.startsAt;
+      return startsAt != null && _isSameDay(startsAt, day);
+    }).toList();
+  }
+
+  String _formatEventTime(String value) {
+    if (value.isEmpty) return 'All day';
+    final parts = value.split(':');
+    if (parts.length < 2) return value;
+    final hour = int.tryParse(parts[0]) ?? 0;
+    final minute = parts[1];
+    final normalizedHour = hour == 0 ? 12 : (hour > 12 ? hour - 12 : hour);
+    final suffix = hour >= 12 ? 'PM' : 'AM';
+    return '$normalizedHour:$minute $suffix';
+  }
+
+  Widget _buildMonthPage(DateTime month) {
+    final days = _daysForMonth(month);
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
+      children: [
+        Container(
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+          decoration: BoxDecoration(
+            color: const Color(0xFF09090B),
+            borderRadius: BorderRadius.circular(28),
+            border: Border.all(color: const Color(0xFF27272A)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '${_calendarMonths[month.month - 1]} ${month.year}',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 28,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Scroll vertically to move through months. Tap a day to inspect events.',
+                style: TextStyle(color: Color(0xFFA1A1AA), fontSize: 13),
+              ),
+              const SizedBox(height: 18),
+              Row(
+                children: _calendarWeekdays
+                    .map(
+                      (weekday) => Expanded(
+                        child: Center(
+                          child: Text(
+                            weekday,
+                            style: const TextStyle(
+                              color: Color(0xFF71717A),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ),
+                    )
+                    .toList(),
+              ),
+              const SizedBox(height: 12),
+              GridView.builder(
+                itemCount: days.length,
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 7,
+                  crossAxisSpacing: 8,
+                  mainAxisSpacing: 8,
+                  childAspectRatio: 0.78,
+                ),
+                itemBuilder: (context, index) {
+                  final day = days[index];
+                  if (day == null) {
+                    return const SizedBox.shrink();
+                  }
+                  final dayEvents = _eventsForDay(day);
+                  final isToday = _isSameDay(day, _today);
+                  final isSelected =
+                      _selectedDate != null && _isSameDay(day, _selectedDate!);
+                  return InkWell(
+                    borderRadius: BorderRadius.circular(18),
+                    onTap: () {
+                      setState(() {
+                        _selectedDate = day;
+                        _tabController.animateTo(1);
+                      });
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? const Color(0xFF1D4ED8).withValues(alpha: 0.25)
+                            : const Color(0xFF111113),
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(
+                          color: isToday
+                              ? const Color(0xFF38BDF8)
+                              : (dayEvents.isNotEmpty
+                                    ? const Color(0xFF3F3F46)
+                                    : const Color(0xFF18181B)),
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '${day.day}',
+                            style: TextStyle(
+                              color: isToday
+                                  ? const Color(0xFFBAE6FD)
+                                  : Colors.white,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          const Spacer(),
+                          if (dayEvents.isNotEmpty)
+                            Wrap(
+                              spacing: 4,
+                              runSpacing: 4,
+                              children: dayEvents
+                                  .take(3)
+                                  .map(
+                                    (event) => Container(
+                                      width: 8,
+                                      height: 8,
+                                      decoration: BoxDecoration(
+                                        color: event.executed
+                                            ? const Color(0xFF10B981)
+                                            : const Color(0xFFF59E0B),
+                                        borderRadius: BorderRadius.circular(
+                                          999,
+                                        ),
+                                      ),
+                                    ),
+                                  )
+                                  .toList(),
+                            ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildEventTile(CalendarEventModel event) {
+    return Container(
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: Color(0xFF18181B))),
+      ),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(vertical: 10),
+        leading: CircleAvatar(
+          backgroundColor: event.executed
+              ? const Color(0xFF10B981).withValues(alpha: 0.2)
+              : const Color(0xFF1F2937),
+          child: Icon(
+            event.executed ? LucideIcons.check : LucideIcons.calendar,
+            color: event.executed
+                ? const Color(0xFF10B981)
+                : const Color(0xFF93C5FD),
+          ),
+        ),
+        title: Text(
+          event.prompt,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        subtitle: Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(
+            '${event.date} • ${_formatEventTime(event.time)} • ${event.agent}',
+            style: const TextStyle(color: Color(0xFFA1A1AA)),
+          ),
+        ),
+        trailing: IconButton(
+          icon: const Icon(LucideIcons.trash2, color: Colors.redAccent),
+          onPressed: () => _deleteEvent(event.id),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEventsView() {
+    final visibleEvents = _selectedDate == null
+        ? _events
+        : _eventsForDay(_selectedDate!);
+
+    if (visibleEvents.isEmpty) {
+      return Center(
+        child: Text(
+          _selectedDate == null
+              ? 'No calendar events yet'
+              : 'No events for ${_selectedDate!.year}-${_selectedDate!.month.toString().padLeft(2, '0')}-${_selectedDate!.day.toString().padLeft(2, '0')}',
+          style: const TextStyle(color: Color(0xFF71717A)),
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: _loadEvents,
+      child: ListView.separated(
+        padding: EdgeInsets.zero,
+        itemCount: visibleEvents.length,
+        separatorBuilder: (_, __) => const SizedBox.shrink(),
+        itemBuilder: (context, index) => _buildEventTile(visibleEvents[index]),
+      ),
+    );
   }
 
   @override
@@ -151,64 +449,111 @@ class _CalendarScreenState extends State<CalendarScreen> {
         ),
         backgroundColor: Colors.transparent,
         elevation: 0,
+        bottom: TabBar(
+          controller: _tabController,
+          indicatorColor: const Color(0xFF38BDF8),
+          labelColor: Colors.white,
+          unselectedLabelColor: const Color(0xFF71717A),
+          tabs: const [
+            Tab(text: 'calendar view'),
+            Tab(text: 'events view'),
+          ],
+        ),
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : _events.isEmpty
-          ? const Center(
-              child: Text(
-                'No upcoming events',
-                style: TextStyle(color: Colors.grey),
-              ),
-            )
-          : ListView.builder(
-              padding: const EdgeInsets.all(16),
-              itemCount: _events.length,
-              itemBuilder: (context, index) {
-                final event = _events[index];
-                return Card(
-                  color: const Color(0xFF09090B),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    side: const BorderSide(color: Color(0xFF27272A)),
+          : TabBarView(
+              controller: _tabController,
+              children: [
+                RefreshIndicator(
+                  onRefresh: _loadEvents,
+                  child: PageView.builder(
+                    controller: _monthController,
+                    scrollDirection: Axis.vertical,
+                    itemBuilder: (context, index) {
+                      final month = _monthForPage(index);
+                      return _buildMonthPage(month);
+                    },
                   ),
-                  margin: const EdgeInsets.only(bottom: 12),
-                  child: ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor: event.executed
-                          ? const Color(0xFF10B981).withValues(alpha: 0.2)
-                          : const Color(0xFF3F3F46),
-                      child: Icon(
-                        event.executed
-                            ? LucideIcons.check
-                            : LucideIcons.calendar,
-                        color: event.executed
-                            ? const Color(0xFF10B981)
-                            : Colors.white,
-                      ),
-                    ),
-                    title: Text(
-                      event.prompt,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    subtitle: Text(
-                      '${event.date} at ${event.time} • Agent: ${event.agent}',
-                      style: const TextStyle(color: Colors.grey),
-                    ),
-                    trailing: IconButton(
-                      icon: const Icon(
-                        LucideIcons.trash2,
-                        color: Colors.redAccent,
-                      ),
-                      onPressed: () => _deleteEvent(event.id),
-                    ),
-                  ),
-                );
-              },
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: _buildEventsView(),
+                ),
+              ],
             ),
+    );
+  }
+}
+
+class _ThinkingBubble extends StatefulWidget {
+  const _ThinkingBubble();
+
+  @override
+  State<_ThinkingBubble> createState() => _ThinkingBubbleState();
+}
+
+class _ThinkingBubbleState extends State<_ThinkingBubble> {
+  late final Timer _timer;
+  int _step = 1;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(milliseconds: 450), (_) {
+      if (!mounted) return;
+      setState(() {
+        _step = _step == 3 ? 1 : _step + 1;
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(top: 6, bottom: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Container(
+            width: 32,
+            height: 32,
+            decoration: const BoxDecoration(
+              color: Color(0xFF111113),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(LucideIcons.bot, color: Colors.white, size: 16),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: const BoxDecoration(
+              color: Color(0xFF0F0F0F),
+              borderRadius: BorderRadius.only(
+                topLeft: Radius.circular(18),
+                topRight: Radius.circular(18),
+                bottomLeft: Radius.circular(4),
+                bottomRight: Radius.circular(18),
+              ),
+            ),
+            child: Text(
+              '.${'.' * (_step - 1)}',
+              style: const TextStyle(
+                color: Color(0xFFE4E4E7),
+                fontSize: 22,
+                letterSpacing: 3,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1290,13 +1635,116 @@ class _ChatScreenState extends State<ChatScreen> {
     _scrollToBottom();
   }
 
+  String _normalizeProvider(String provider) {
+    final normalized = provider.trim().toLowerCase();
+    return normalized.isEmpty ? 'openrouter' : normalized;
+  }
+
+  String _providerLabel(String provider) {
+    switch (_normalizeProvider(provider)) {
+      case 'openai':
+        return 'OpenAI';
+      case 'anthropic':
+        return 'Anthropic';
+      case 'gemini':
+        return 'Gemini';
+      default:
+        return 'OpenRouter';
+    }
+  }
+
+  String _modelType(String provider, String model) {
+    final normalizedModel = model.trim().toLowerCase();
+    final normalizedProvider = _normalizeProvider(provider);
+    if (normalizedModel.isEmpty) return 'Not set';
+    if (normalizedModel.startsWith('openai/')) return 'OpenAI via OpenRouter';
+    if (normalizedModel.startsWith('anthropic/'))
+      return 'Anthropic via OpenRouter';
+    if (normalizedModel.startsWith('google/')) return 'Google via OpenRouter';
+    if (normalizedModel.contains('gpt')) {
+      return normalizedProvider == 'openrouter' ? 'GPT via OpenRouter' : 'GPT';
+    }
+    if (normalizedModel.contains('claude')) {
+      return normalizedProvider == 'openrouter'
+          ? 'Claude via OpenRouter'
+          : 'Claude';
+    }
+    if (normalizedModel.contains('gemini')) {
+      return normalizedProvider == 'openrouter'
+          ? 'Gemini via OpenRouter'
+          : 'Gemini';
+    }
+    if (normalizedModel.contains('llama')) {
+      return normalizedProvider == 'openrouter'
+          ? 'Llama via OpenRouter'
+          : 'Llama';
+    }
+    return _providerLabel(provider);
+  }
+
+  bool _providerHasKey(Map<String, dynamic>? settings, String provider) {
+    if (settings == null) return false;
+    final keyMap = {
+      'openrouter': settings['openrouterKey'],
+      'openai': settings['openaiKey'],
+      'anthropic': settings['anthropicKey'],
+      'gemini': settings['geminiKey'],
+    };
+    return keyMap[_normalizeProvider(provider)] == true;
+  }
+
+  String _encodeStoredMessage(ChatMessage message) {
+    return jsonEncode({
+      'role': message.role,
+      'content': message.content,
+      'timestamp': message.timestamp.toIso8601String(),
+      'isRead': message.isRead,
+      'files': message.files ?? <String>[],
+    });
+  }
+
+  ChatMessage? _decodeStoredMessage(String raw) {
+    try {
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      final filesDynamic = decoded['files'] as List<dynamic>? ?? [];
+      final files = filesDynamic.map((file) => file.toString()).toList();
+      return ChatMessage(
+        role: decoded['role']?.toString() ?? 'system',
+        content: decoded['content']?.toString() ?? '',
+        timestamp:
+            DateTime.tryParse(decoded['timestamp']?.toString() ?? '') ??
+            DateTime.now(),
+        isRead: decoded['isRead'] as bool? ?? true,
+        files: files.isEmpty ? null : files,
+      );
+    } catch (_) {
+      final parts = raw.split('|||');
+      if (parts.length < 3) return null;
+      return ChatMessage(
+        role: parts[0],
+        content: parts[1],
+        timestamp: DateTime.tryParse(parts[2]) ?? DateTime.now(),
+        isRead: true,
+      );
+    }
+  }
+
+  List<String> _extractFiles(dynamic rawFiles) {
+    final filesDynamic = rawFiles as List<dynamic>? ?? [];
+    return filesDynamic.map((file) => file.toString()).toList();
+  }
+
+  String _messageSignature(String role, String content, List<String> files) {
+    final normalizedFiles = [...files]..sort();
+    return '$role|||$content|||${normalizedFiles.join(',')}';
+  }
+
   /// /status is deterministic: checks server reachability, LLM config, context
   /// token usage and reports all locally — no LLM call needed.
   void _executeStatusCommand() async {
     final api = ApiService();
     final now = DateTime.now();
 
-    // Add the user-issued command to chat
     setState(() {
       _messages.add(
         ChatMessage(
@@ -1309,71 +1757,74 @@ class _ChatScreenState extends State<ChatScreen> {
     });
     _scrollToBottom();
 
-    // Check server reachability
     bool serverReachable = false;
+    Map<String, dynamic>? settings;
+    Map<String, dynamic>? stats;
+
     try {
       final metrics = await api.getMetrics();
       serverReachable = metrics != null;
     } catch (_) {}
 
-    if (!mounted) return;
-
-    // Check LLM configuration (provider key presence)
-    bool llmConfigured = false;
-    String llmProvider = widget.agent.provider;
-    Map<String, dynamic>? settings;
     try {
       settings = await api.getSettings();
-      if (settings != null) {
-        final keyMap = {
-          'openrouter': settings['openrouterKey'],
-          'openai': settings['openaiKey'],
-          'anthropic': settings['anthropicKey'],
-          'gemini': settings['geminiKey'],
-        };
-        final key = keyMap[llmProvider];
-        llmConfigured = key != null && key.toString().isNotEmpty;
-      }
     } catch (_) {}
 
-    if (!mounted) return;
-
-    // Fetch agent stats for context window info
-    Map<String, dynamic>? stats;
     try {
       stats = await api.getAgentStats(widget.agent.id.toString());
     } catch (_) {}
 
     if (!mounted) return;
 
-    // Build the deterministic status report
+    final provider = _normalizeProvider(widget.agent.provider);
+    final providerLabel = _providerLabel(provider);
+    final model = widget.agent.model.trim();
+    final hasProvider = {
+      'openrouter',
+      'openai',
+      'anthropic',
+      'gemini',
+    }.contains(provider);
+    final hasModel = model.isNotEmpty && model.toLowerCase() != 'unknown';
+    final hasApiKey = _providerHasKey(settings, provider);
+    final llmConfigured = hasProvider && hasModel && hasApiKey;
+    final missing = <String>[];
+    if (!hasProvider) missing.add('provider');
+    if (!hasModel) missing.add('model');
+    if (!hasApiKey) missing.add('$providerLabel API key');
+
     final buffer = StringBuffer();
     buffer.writeln('=== /status report ===');
     buffer.writeln();
     buffer.writeln(
-      '🌐 Server: ${serverReachable ? "✅ Reachable" : "❌ Unreachable"} (${api.baseUrl ?? "not configured"})',
+      '🌐 Server      : ${serverReachable ? "✅ Reachable" : "❌ Unreachable"} (${api.baseUrl ?? "not configured"})',
     );
-    buffer.writeln();
-    buffer.writeln('🤖 LLM Provider : $llmProvider');
+    buffer.writeln('🤖 Provider    : $providerLabel');
+    buffer.writeln('🧠 Model       : ${hasModel ? model : "Not set"}');
+    buffer.writeln('🧬 Model Type  : ${_modelType(provider, model)}');
     buffer.writeln(
-      '🔑 LLM API Key  : ${llmConfigured ? "✅ Configured" : "⚠️ Missing — add it in Settings → API Keys"}',
+      '🔑 API Key     : ${hasApiKey ? "✅ Configured" : "⚠️ Missing"}',
     );
+    buffer.writeln('✅ LLM Ready   : ${llmConfigured ? "Yes" : "No"}');
+    if (missing.isNotEmpty) {
+      buffer.writeln('🧩 Missing     : ${missing.join(', ')}');
+    }
     buffer.writeln();
 
     if (stats != null) {
       final tokens = stats['tokenEstimate'] ?? stats['tokens'] ?? 'N/A';
       final ctxWindow = stats['contextWindow'] ?? 'N/A';
       final calls = stats['llmApiCalls'] ?? 'N/A';
-      buffer.writeln('📊 Context Window : $ctxWindow tokens');
-      buffer.writeln('🔢 Token Estimate : $tokens');
-      buffer.writeln('📡 LLM API Calls  : $calls');
+      buffer.writeln('📊 Context Win : $ctxWindow tokens');
+      buffer.writeln('🔢 Tokens      : $tokens');
+      buffer.writeln('📡 API Calls   : $calls');
     } else {
-      buffer.writeln('📊 Context stats  : unavailable');
+      buffer.writeln('📊 Context Win : unavailable');
     }
 
     buffer.writeln();
-    buffer.writeln('📱 Local messages : ${_messages.length}');
-    buffer.write('⏰ Timestamp      : ${now.toLocal()}');
+    buffer.writeln('📱 Messages    : ${_messages.length}');
+    buffer.write('⏰ Timestamp   : ${now.toLocal()}');
 
     setState(() {
       _messages.add(
@@ -1472,25 +1923,58 @@ class _ChatScreenState extends State<ChatScreen> {
     super.initState();
     _backgroundId = widget.agent.background;
     _loadBackgroundPreference();
-    // Load persisted offline copy of conversation
     _loadMessages();
 
-    // Listen for incoming WebSocket messages (real-time sync)
+    // Reference: HermitShell/docs/frontend-backend-communication.md.
     _wsSubscription = ApiService().messageStream.listen((data) {
       if (!mounted) return;
-      if (data['type'] == 'new_message' &&
-          data['agent_id'].toString() == widget.agent.id.toString()) {
+      if (data['agent_id'].toString() != widget.agent.id.toString()) {
+        return;
+      }
+
+      final eventType = data['type']?.toString() ?? '';
+      if (eventType == 'conversation_cleared') {
         setState(() {
-          // Deduplicate: only add if not already present
+          _messages
+            ..clear()
+            ..add(
+              ChatMessage(
+                role: 'system',
+                content: '✅ Conversation cleared. Context window reset.',
+                timestamp: DateTime.now(),
+                isRead: true,
+              ),
+            );
+        });
+        _persistMessages();
+        _scrollToBottom();
+        return;
+      }
+
+      if (eventType == 'new_message') {
+        final files = _extractFiles(data['files']);
+        final signature = _messageSignature(
+          data['role']?.toString() ?? 'assistant',
+          data['content']?.toString() ?? '',
+          files,
+        );
+        setState(() {
           if (!_messages.any(
-            (m) => m.content == data['content'] && m.role == data['role'],
+            (message) =>
+                _messageSignature(
+                  message.role,
+                  message.content,
+                  message.files ?? const <String>[],
+                ) ==
+                signature,
           )) {
             _messages.add(
               ChatMessage(
-                role: data['role'],
-                content: data['content'],
+                role: data['role']?.toString() ?? 'assistant',
+                content: data['content']?.toString() ?? '',
                 timestamp: DateTime.now(),
                 isRead: true,
+                files: files.isEmpty ? null : files,
               ),
             );
             _persistMessages();
@@ -1498,8 +1982,9 @@ class _ChatScreenState extends State<ChatScreen> {
           }
         });
 
-        if (data['role'] == 'assistant') {
-          _showNotification(data['content']);
+        if (data['role'] == 'assistant' &&
+            (data['content']?.toString().isNotEmpty ?? false)) {
+          _showNotification(data['content'].toString());
         }
       }
     });
@@ -1522,16 +2007,7 @@ class _ChatScreenState extends State<ChatScreen> {
       final key = 'chat_messages_${widget.agent.id}';
       final raw = prefs.getStringList(key) ?? [];
       final loaded = raw
-          .map((s) {
-            final parts = s.split('|||');
-            if (parts.length < 3) return null;
-            return ChatMessage(
-              role: parts[0],
-              content: parts[1],
-              timestamp: DateTime.tryParse(parts[2]) ?? DateTime.now(),
-              isRead: true,
-            );
-          })
+          .map(_decodeStoredMessage)
           .whereType<ChatMessage>()
           .toList();
 
@@ -1540,29 +2016,21 @@ class _ChatScreenState extends State<ChatScreen> {
         _scrollToBottom();
       }
     } catch (_) {
-      // If loading fails, start with clean slate
+      // If loading fails, start with clean slate.
     }
   }
 
-  /// Persists messages to SharedPreferences for offline availability.
-  /// Auto-syncs — called after every mutation of _messages.
   Future<void> _persistMessages() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final key = 'chat_messages_${widget.agent.id}';
-      // Keep the last 200 messages to avoid unbounded growth
       final toStore = _messages.length > 200
           ? _messages.sublist(_messages.length - 200)
           : _messages;
-      final raw = toStore
-          .map(
-            (m) =>
-                '${m.role}|||${m.content}|||${m.timestamp.toIso8601String()}',
-          )
-          .toList();
+      final raw = toStore.map(_encodeStoredMessage).toList();
       await prefs.setStringList(key, raw);
     } catch (_) {
-      // Silently ignore persistence errors
+      // Silently ignore persistence errors.
     }
   }
 
@@ -1954,8 +2422,11 @@ class _ChatScreenState extends State<ChatScreen> {
                     horizontal: 12,
                     vertical: 8,
                   ),
-                  itemCount: _messages.length,
+                  itemCount: _messages.length + (_isSending ? 1 : 0),
                   itemBuilder: (context, index) {
+                    if (_isSending && index == _messages.length) {
+                      return const _ThinkingBubble();
+                    }
                     final msg = _messages[index];
                     final isUser = msg.role == 'user';
                     final isSystem = msg.role == 'system';
