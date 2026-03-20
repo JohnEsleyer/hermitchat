@@ -1500,6 +1500,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _takeoverMode = false;
   bool _isSending = false;
   bool _showCommands = false;
+  bool _showSystemResponses = true;
 
   // Offline message store — persisted locally and synced with server
   // Ref: docs/chat_persistence.md
@@ -1537,16 +1538,25 @@ class _ChatScreenState extends State<ChatScreen> {
         .toList();
   }
 
+  List<ChatMessage> get _visibleMessages {
+    if (_showSystemResponses) return _messages;
+    return _messages.where((message) => message.role != 'system').toList();
+  }
+
   bool _containsTags(String text) {
     return _tagPattern.hasMatch(text);
   }
 
+  /// Rejects tags and displays system message when user tries to use tags in non-takeover mode.
+  /// Tags like <terminal>, <action> etc. are only allowed in takeover mode.
+  /// Ref: docs/xml-tags.md
   void _rejectTagsWithEnd(String text) {
     setState(() {
       _messages.add(
         ChatMessage(
           role: 'system',
-          content: 'Tag rejected: Tags are not allowed in current mode. $text',
+          content:
+              'System: Tag rejected. Tags are not allowed in current mode.',
           timestamp: DateTime.now(),
           isRead: true,
         ),
@@ -1560,36 +1570,30 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       );
     });
+    _persistMessages();
     _scrollToBottom();
   }
 
-  /// Handles slash commands.
-  /// /status is fully DETERMINISTIC — never calls the LLM.
-  /// /clear wipes the local message list AND calls the server to reset context.
-  /// Other commands are sent to the server like a regular message.
-  /// Ref: docs/commands.md
+  /// Handles slash commands through the server so command execution is
+  /// persisted in shared history and mirrored through websocket updates.
+  /// Ref: docs/slash-commands.md
   void _sendCommand(String command) async {
-    // Always close the command palette before processing
-    setState(() => _showCommands = false);
+    final commandName = command.split(' ')[0];
 
-    // ── /status ── deterministic, no LLM required ──────────────────────────
-    if (command.trim() == '/status') {
-      _executeStatusCommand();
-      return;
-    }
-
-    // ── /clear ── clears local conversation + server context ───────────────
-    if (command.trim() == '/clear') {
-      _executeClearCommand();
-      return;
-    }
-
-    // ── Other commands (e.g. /reset) — sent to server ──────────────────────
     setState(() {
+      _showCommands = false;
       _messages.add(
         ChatMessage(
           role: 'user',
           content: command,
+          timestamp: DateTime.now(),
+          isRead: true,
+        ),
+      );
+      _messages.add(
+        ChatMessage(
+          role: 'system',
+          content: 'Processing $commandName...',
           timestamp: DateTime.now(),
           isRead: true,
         ),
@@ -1604,93 +1608,36 @@ class _ChatScreenState extends State<ChatScreen> {
     );
     if (!mounted) return;
 
-    if (response != null) {
-      final message =
-          response['message'] as String? ??
-          response['response'] as String? ??
-          '';
-      setState(() {
-        _messages.add(
-          ChatMessage(
-            role: 'assistant',
-            content: message,
-            timestamp: DateTime.now(),
-            isRead: true,
-          ),
-        );
-      });
-    } else {
-      setState(() {
+    setState(() {
+      if (response != null) {
+        final message =
+            response['message'] as String? ??
+            response['response'] as String? ??
+            '';
+        if (message.isNotEmpty) {
+          _messages.add(
+            ChatMessage(
+              role: 'system',
+              content: message,
+              timestamp: DateTime.now(),
+              isRead: true,
+            ),
+          );
+        }
+      } else {
         _messages.add(
           ChatMessage(
             role: 'system',
-            content: 'Command sent.',
+            content:
+                'System: command was sent, but the server did not return a live update.',
             timestamp: DateTime.now(),
             isRead: true,
           ),
         );
-      });
-    }
+      }
+    });
     _persistMessages();
     _scrollToBottom();
-  }
-
-  String _normalizeProvider(String provider) {
-    final normalized = provider.trim().toLowerCase();
-    return normalized.isEmpty ? 'openrouter' : normalized;
-  }
-
-  String _providerLabel(String provider) {
-    switch (_normalizeProvider(provider)) {
-      case 'openai':
-        return 'OpenAI';
-      case 'anthropic':
-        return 'Anthropic';
-      case 'gemini':
-        return 'Gemini';
-      default:
-        return 'OpenRouter';
-    }
-  }
-
-  String _modelType(String provider, String model) {
-    final normalizedModel = model.trim().toLowerCase();
-    final normalizedProvider = _normalizeProvider(provider);
-    if (normalizedModel.isEmpty) return 'Not set';
-    if (normalizedModel.startsWith('openai/')) return 'OpenAI via OpenRouter';
-    if (normalizedModel.startsWith('anthropic/'))
-      return 'Anthropic via OpenRouter';
-    if (normalizedModel.startsWith('google/')) return 'Google via OpenRouter';
-    if (normalizedModel.contains('gpt')) {
-      return normalizedProvider == 'openrouter' ? 'GPT via OpenRouter' : 'GPT';
-    }
-    if (normalizedModel.contains('claude')) {
-      return normalizedProvider == 'openrouter'
-          ? 'Claude via OpenRouter'
-          : 'Claude';
-    }
-    if (normalizedModel.contains('gemini')) {
-      return normalizedProvider == 'openrouter'
-          ? 'Gemini via OpenRouter'
-          : 'Gemini';
-    }
-    if (normalizedModel.contains('llama')) {
-      return normalizedProvider == 'openrouter'
-          ? 'Llama via OpenRouter'
-          : 'Llama';
-    }
-    return _providerLabel(provider);
-  }
-
-  bool _providerHasKey(Map<String, dynamic>? settings, String provider) {
-    if (settings == null) return false;
-    final keyMap = {
-      'openrouter': settings['openrouterKey'],
-      'openai': settings['openaiKey'],
-      'anthropic': settings['anthropicKey'],
-      'gemini': settings['geminiKey'],
-    };
-    return keyMap[_normalizeProvider(provider)] == true;
   }
 
   String _encodeStoredMessage(ChatMessage message) {
@@ -1739,147 +1686,6 @@ class _ChatScreenState extends State<ChatScreen> {
     return '$role|||$content|||${normalizedFiles.join(',')}';
   }
 
-  /// /status is deterministic: checks server reachability, LLM config, context
-  /// token usage and reports all locally — no LLM call needed.
-  void _executeStatusCommand() async {
-    final api = ApiService();
-    final now = DateTime.now();
-
-    setState(() {
-      _messages.add(
-        ChatMessage(
-          role: 'user',
-          content: '/status',
-          timestamp: now,
-          isRead: true,
-        ),
-      );
-    });
-    _scrollToBottom();
-
-    bool serverReachable = false;
-    Map<String, dynamic>? settings;
-    Map<String, dynamic>? stats;
-
-    try {
-      final metrics = await api.getMetrics();
-      serverReachable = metrics != null;
-    } catch (_) {}
-
-    try {
-      settings = await api.getSettings();
-    } catch (_) {}
-
-    try {
-      stats = await api.getAgentStats(widget.agent.id.toString());
-    } catch (_) {}
-
-    if (!mounted) return;
-
-    final provider = _normalizeProvider(widget.agent.provider);
-    final providerLabel = _providerLabel(provider);
-    final model = widget.agent.model.trim();
-    final hasProvider = {
-      'openrouter',
-      'openai',
-      'anthropic',
-      'gemini',
-    }.contains(provider);
-    final hasModel = model.isNotEmpty && model.toLowerCase() != 'unknown';
-    final hasApiKey = _providerHasKey(settings, provider);
-    final llmConfigured = hasProvider && hasModel && hasApiKey;
-    final missing = <String>[];
-    if (!hasProvider) missing.add('provider');
-    if (!hasModel) missing.add('model');
-    if (!hasApiKey) missing.add('$providerLabel API key');
-
-    final buffer = StringBuffer();
-    buffer.writeln('=== /status report ===');
-    buffer.writeln();
-    buffer.writeln(
-      '🌐 Server      : ${serverReachable ? "✅ Reachable" : "❌ Unreachable"} (${api.baseUrl ?? "not configured"})',
-    );
-    buffer.writeln('🤖 Provider    : $providerLabel');
-    buffer.writeln('🧠 Model       : ${hasModel ? model : "Not set"}');
-    buffer.writeln('🧬 Model Type  : ${_modelType(provider, model)}');
-    buffer.writeln(
-      '🔑 API Key     : ${hasApiKey ? "✅ Configured" : "⚠️ Missing"}',
-    );
-    buffer.writeln('✅ LLM Ready   : ${llmConfigured ? "Yes" : "No"}');
-    if (missing.isNotEmpty) {
-      buffer.writeln('🧩 Missing     : ${missing.join(', ')}');
-    }
-    buffer.writeln();
-
-    if (stats != null) {
-      final tokens = stats['tokenEstimate'] ?? stats['tokens'] ?? 'N/A';
-      final ctxWindow = stats['contextWindow'] ?? 'N/A';
-      final calls = stats['llmApiCalls'] ?? 'N/A';
-      buffer.writeln('📊 Context Win : $ctxWindow tokens');
-      buffer.writeln('🔢 Tokens      : $tokens');
-      buffer.writeln('📡 API Calls   : $calls');
-    } else {
-      buffer.writeln('📊 Context Win : unavailable');
-    }
-
-    buffer.writeln();
-    buffer.writeln('📱 Messages    : ${_messages.length}');
-    buffer.write('⏰ Timestamp   : ${now.toLocal()}');
-
-    setState(() {
-      _messages.add(
-        ChatMessage(
-          role: 'system',
-          content: buffer.toString(),
-          timestamp: DateTime.now(),
-          isRead: true,
-        ),
-      );
-    });
-    _persistMessages();
-    _scrollToBottom();
-  }
-
-  /// /clear — wipes local message list and calls server to reset agent context.
-  void _executeClearCommand() async {
-    // Add confirmation message first
-    setState(() {
-      _messages.add(
-        ChatMessage(
-          role: 'user',
-          content: '/clear',
-          timestamp: DateTime.now(),
-          isRead: true,
-        ),
-      );
-    });
-    _scrollToBottom();
-
-    // Call server to clear context
-    final response = await ApiService().sendMessage(
-      widget.agent.id.toString(),
-      '/clear',
-    );
-    if (!mounted) return;
-
-    // Clear local messages and update persisted copy
-    setState(() {
-      _messages.clear();
-      _messages.add(
-        ChatMessage(
-          role: 'system',
-          content: response != null
-              ? '✅ Conversation cleared. Context window reset.'
-              : '✅ Local conversation cleared. (Server may be offline.)',
-          timestamp: DateTime.now(),
-          isRead: true,
-        ),
-      );
-    });
-    _persistMessages();
-    _scrollToBottom();
-  }
-
   void _showMetrics() async {
     final metrics = await ApiService().getAgentStats(
       widget.agent.id.toString(),
@@ -1923,6 +1729,7 @@ class _ChatScreenState extends State<ChatScreen> {
     super.initState();
     _backgroundId = widget.agent.background;
     _loadBackgroundPreference();
+    _loadSystemVisibilityPreference();
     _loadMessages();
 
     // Reference: HermitShell/docs/frontend-backend-communication.md.
@@ -1999,6 +1806,20 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() => _backgroundId = backgroundId);
   }
 
+  Future<void> _loadSystemVisibilityPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    final value = prefs.getBool('show_system_responses');
+    if (!mounted || value == null) return;
+    setState(() => _showSystemResponses = value);
+  }
+
+  Future<void> _setShowSystemResponses(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('show_system_responses', value);
+    if (!mounted) return;
+    setState(() => _showSystemResponses = value);
+  }
+
   /// Loads persisted messages from SharedPreferences (offline copy).
   /// This ensures the conversation survives app restarts and network outages.
   Future<void> _loadMessages() async {
@@ -2063,7 +1884,7 @@ class _ChatScreenState extends State<ChatScreen> {
     // Close the command palette whenever send is pressed
     setState(() => _showCommands = false);
 
-    // Dispatch slash commands deterministically
+    // Dispatch slash commands through the server so they land in shared history.
     if (text.startsWith('/')) {
       _controller.clear();
       _sendCommand(text);
@@ -2086,6 +1907,8 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
 
+    final isSystemExecution = _containsTags(text);
+
     setState(() {
       _isSending = true;
       _messages.add(
@@ -2096,6 +1919,16 @@ class _ChatScreenState extends State<ChatScreen> {
           isRead: true,
         ),
       );
+      if (isSystemExecution) {
+        _messages.add(
+          ChatMessage(
+            role: 'system',
+            content: 'System: Executing system commands...',
+            timestamp: DateTime.now(),
+            isRead: true,
+          ),
+        );
+      }
       _controller.clear();
     });
     _persistMessages();
@@ -2127,18 +1960,20 @@ class _ChatScreenState extends State<ChatScreen> {
           );
         }
 
-        final filesDynamic = response['files'] as List<dynamic>? ?? [];
-        final files = filesDynamic.map((f) => f.toString()).toList();
+        if (!isSystemExecution) {
+          final filesDynamic = response['files'] as List<dynamic>? ?? [];
+          final files = filesDynamic.map((f) => f.toString()).toList();
 
-        _messages.add(
-          ChatMessage(
-            role: 'assistant',
-            content: message,
-            timestamp: DateTime.now(),
-            isRead: true,
-            files: files.isNotEmpty ? files : null,
-          ),
-        );
+          _messages.add(
+            ChatMessage(
+              role: 'assistant',
+              content: message,
+              timestamp: DateTime.now(),
+              isRead: true,
+              files: files.isNotEmpty ? files : null,
+            ),
+          );
+        }
       } else {
         // In takeover mode the user is pretending to be the agent.
         // A network failure does not mean the agent failed — surface a clearer message.
@@ -2329,6 +2164,9 @@ class _ChatScreenState extends State<ChatScreen> {
                 case 'clear':
                   _sendCommand('/clear');
                   break;
+                case 'show_system':
+                  _setShowSystemResponses(!_showSystemResponses);
+                  break;
                 case 'metrics':
                   _showMetrics();
                   break;
@@ -2383,6 +2221,25 @@ class _ChatScreenState extends State<ChatScreen> {
                   ],
                 ),
               ),
+              PopupMenuItem(
+                value: 'show_system',
+                child: Row(
+                  children: [
+                    Icon(
+                      _showSystemResponses
+                          ? LucideIcons.eye
+                          : LucideIcons.eyeOff,
+                      size: 18,
+                      color: Colors.white,
+                    ),
+                    const SizedBox(width: 12),
+                    Text(
+                      _showSystemResponses ? 'Hide System' : 'Show System',
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                  ],
+                ),
+              ),
               const PopupMenuItem(
                 value: 'metrics',
                 child: Row(
@@ -2422,16 +2279,17 @@ class _ChatScreenState extends State<ChatScreen> {
                     horizontal: 12,
                     vertical: 8,
                   ),
-                  itemCount: _messages.length + (_isSending ? 1 : 0),
+                  itemCount: _visibleMessages.length + (_isSending ? 1 : 0),
                   itemBuilder: (context, index) {
-                    if (_isSending && index == _messages.length) {
+                    if (_isSending && index == _visibleMessages.length) {
                       return const _ThinkingBubble();
                     }
-                    final msg = _messages[index];
+                    final msg = _visibleMessages[index];
                     final isUser = msg.role == 'user';
                     final isSystem = msg.role == 'system';
                     final isFirst =
-                        index == 0 || _messages[index - 1].role != msg.role;
+                        index == 0 ||
+                        _visibleMessages[index - 1].role != msg.role;
                     return _buildMessageBubble(msg, isUser, isSystem, isFirst);
                   },
                 ),
@@ -2487,6 +2345,19 @@ class _ChatScreenState extends State<ChatScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (isSystem)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                'system',
+                style: TextStyle(
+                  color: textColor.withValues(alpha: 0.7),
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.8,
+                ),
+              ),
+            ),
           if (msg.content.isNotEmpty)
             Text(
               msg.content,
