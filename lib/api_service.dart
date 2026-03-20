@@ -510,4 +510,63 @@ class ApiService {
     }
     return null;
   }
+
+  Future<Map<String, dynamic>?> getAgentContextWindow(String agentId) async {
+    if (baseUrl == null) return null;
+    try {
+      final response = await http
+          .get(
+            Uri.parse('$baseUrl/api/agents/$agentId/context'),
+            headers: _headers,
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+    } catch (e) {
+      // log error
+    }
+    return null;
+  }
+
+  Future<int> getUnreadCount(String agentId) async {
+    if (baseUrl == null) return 0;
+    try {
+      final response = await http
+          .get(
+            Uri.parse('$baseUrl/api/agents/$agentId/unread'),
+            headers: _headers,
+          )
+          .timeout(const Duration(seconds: 5));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return data['unread'] as int? ?? 0;
+      }
+    } catch (e) {
+      // log error
+    }
+    return 0;
+  }
+
+  Future<String?> getLastMessage(String agentId) async {
+    if (baseUrl == null) return null;
+    try {
+      final response = await http
+          .get(
+            Uri.parse('$baseUrl/api/agents/$agentId/last-message'),
+            headers: _headers,
+          )
+          .timeout(const Duration(seconds: 5));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return data['content'] as String?;
+      }
+    } catch (e) {
+      // log error
+    }
+    return null;
+  }
 }

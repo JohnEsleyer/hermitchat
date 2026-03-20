@@ -3,8 +3,10 @@ import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
+import 'package:audioplayers/audioplayers.dart';
 
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:video_player/video_player.dart';
@@ -16,6 +18,26 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
     FlutterLocalNotificationsPlugin();
+
+class NotificationService {
+  static final NotificationService _instance = NotificationService._internal();
+  factory NotificationService() => _instance;
+  NotificationService._internal();
+
+  final AudioPlayer _audioPlayer = AudioPlayer();
+
+  Future<void> playNotificationSound() async {
+    try {
+      await _audioPlayer.play(AssetSource('notification.mp3'));
+    } catch (e) {
+      debugPrint('Error playing notification sound: $e');
+    }
+  }
+
+  void dispose() {
+    _audioPlayer.dispose();
+  }
+}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -561,7 +583,12 @@ class _ThinkingBubbleState extends State<_ThinkingBubble> {
 class _VideoPlayerWidget extends StatefulWidget {
   final String url;
   final String token;
-  const _VideoPlayerWidget({required this.url, required this.token});
+  final bool isDirectUrl;
+  const _VideoPlayerWidget({
+    required this.url,
+    required this.token,
+    this.isDirectUrl = false,
+  });
 
   @override
   State<_VideoPlayerWidget> createState() => _VideoPlayerWidgetState();
@@ -569,58 +596,137 @@ class _VideoPlayerWidget extends StatefulWidget {
 
 class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
   late VideoPlayerController _controller;
+  bool _hasError = false;
+  bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    _controller =
-        VideoPlayerController.networkUrl(
-            Uri.parse(widget.url),
-            httpHeaders: {'Authorization': 'Bearer ${widget.token}'},
-          )
-          ..initialize().then((_) {
-            setState(() {});
-          });
+    _initController();
+  }
+
+  Future<void> _initController() async {
+    try {
+      if (widget.isDirectUrl) {
+        _controller = VideoPlayerController.networkUrl(Uri.parse(widget.url))
+          ..initialize()
+              .then((_) {
+                if (mounted) {
+                  setState(() {
+                    _isLoading = false;
+                  });
+                }
+              })
+              .catchError((e) {
+                if (mounted) {
+                  setState(() {
+                    _hasError = true;
+                    _isLoading = false;
+                  });
+                }
+              });
+      } else {
+        _controller =
+            VideoPlayerController.networkUrl(
+                Uri.parse(widget.url),
+                httpHeaders: {'Authorization': 'Bearer ${widget.token}'},
+              )
+              ..initialize()
+                  .then((_) {
+                    if (mounted) {
+                      setState(() {
+                        _isLoading = false;
+                      });
+                    }
+                  })
+                  .catchError((e) {
+                    if (mounted) {
+                      setState(() {
+                        _hasError = true;
+                        _isLoading = false;
+                      });
+                    }
+                  });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _hasError = true;
+          _isLoading = false;
+        });
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (!_controller.value.isInitialized) {
-      return const SizedBox(
+    if (_hasError) {
+      return Container(
         height: 150,
-        child: Center(child: CircularProgressIndicator()),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1A1A1A),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: const Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(LucideIcons.videoOff, color: Colors.grey, size: 32),
+              SizedBox(height: 8),
+              Text(
+                'Video unavailable',
+                style: TextStyle(color: Colors.grey, fontSize: 12),
+              ),
+            ],
+          ),
+        ),
       );
     }
-    return AspectRatio(
-      aspectRatio: _controller.value.aspectRatio,
-      child: Stack(
-        alignment: Alignment.bottomCenter,
-        children: [
-          VideoPlayer(_controller),
-          VideoProgressIndicator(
-            _controller,
-            allowScrubbing: true,
-            colors: const VideoProgressColors(playedColor: Colors.red),
-          ),
-          Center(
-            child: IconButton(
-              icon: Icon(
-                _controller.value.isPlaying
-                    ? Icons.pause_circle_filled
-                    : Icons.play_circle_filled,
-                color: Colors.white.withValues(alpha: 0.8),
-                size: 50,
-              ),
-              onPressed: () {
-                setState(() {
-                  _controller.value.isPlaying
-                      ? _controller.pause()
-                      : _controller.play();
-                });
-              },
+
+    if (_isLoading || !_controller.value.isInitialized) {
+      return Container(
+        height: 150,
+        decoration: BoxDecoration(
+          color: const Color(0xFF1A1A1A),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: const Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: AspectRatio(
+        aspectRatio: _controller.value.aspectRatio,
+        child: Stack(
+          alignment: Alignment.bottomCenter,
+          children: [
+            VideoPlayer(_controller),
+            VideoProgressIndicator(
+              _controller,
+              allowScrubbing: true,
+              colors: const VideoProgressColors(playedColor: Color(0xFF10B981)),
             ),
-          ),
-        ],
+            Center(
+              child: IconButton(
+                icon: Icon(
+                  _controller.value.isPlaying
+                      ? Icons.pause_circle_filled
+                      : Icons.play_circle_filled,
+                  color: Colors.white.withValues(alpha: 0.8),
+                  size: 50,
+                ),
+                onPressed: () {
+                  setState(() {
+                    _controller.value.isPlaying
+                        ? _controller.pause()
+                        : _controller.play();
+                  });
+                },
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -707,6 +813,7 @@ class ChatMessage {
   final DateTime timestamp;
   final bool isRead;
   final List<String>? files;
+  final String? id;
 
   ChatMessage({
     required this.role,
@@ -714,6 +821,7 @@ class ChatMessage {
     required this.timestamp,
     this.isRead = false,
     this.files,
+    this.id,
   });
 }
 
@@ -1146,11 +1254,64 @@ class _AgentsMainScreenState extends State<AgentsMainScreen> {
   bool _isLoading = true;
   bool _isSearching = false;
   final TextEditingController _searchController = TextEditingController();
+  final Map<String, int> _unreadCounts = {};
+  final Map<String, String> _lastMessages = {};
+  StreamSubscription? _wsSubscription;
 
   @override
   void initState() {
     super.initState();
     _loadAgents();
+    _loadUnreadCounts();
+    _setupWebSocketListener();
+  }
+
+  void _setupWebSocketListener() {
+    _wsSubscription = ApiService().messageStream.listen((data) {
+      if (!mounted) return;
+      final agentId = data['agent_id']?.toString();
+      if (agentId == null) return;
+
+      setState(() {
+        final currentUnread = _unreadCounts[agentId] ?? 0;
+        _unreadCounts[agentId] = currentUnread + 1;
+
+        final content = data['content']?.toString();
+        if (content != null && content.isNotEmpty) {
+          _lastMessages[agentId] = content;
+        }
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _wsSubscription?.cancel();
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadUnreadCounts() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final agentIds = prefs.getStringList('agent_ids') ?? [];
+      final Map<String, int> unread = {};
+      final Map<String, String> lastMsg = {};
+
+      for (final agentId in agentIds) {
+        unread[agentId] = 0;
+        lastMsg[agentId] = '';
+      }
+
+      if (mounted) {
+        setState(() {
+          _unreadCounts.clear();
+          _unreadCounts.addAll(unread);
+          _lastMessages.clear();
+          _lastMessages.addAll(lastMsg);
+        });
+      }
+    } catch (_) {}
   }
 
   void _onSearchChanged(String query) {
@@ -1177,6 +1338,15 @@ class _AgentsMainScreenState extends State<AgentsMainScreen> {
       final agents = await ChatBackgroundPreferences.applyToAgents(
         data.map((json) => Agent.fromJson(json)).toList(),
       );
+
+      final prefs = await SharedPreferences.getInstance();
+      final agentIds = agents.map((a) => a.id).toList();
+      await prefs.setStringList('agent_ids', agentIds);
+
+      for (final agent in agents) {
+        _fetchLastMessage(agent.id);
+      }
+
       if (!mounted) return;
       setState(() {
         _agents = agents;
@@ -1184,6 +1354,28 @@ class _AgentsMainScreenState extends State<AgentsMainScreen> {
         _isLoading = false;
       });
     }
+  }
+
+  Future<void> _fetchLastMessage(String agentId) async {
+    try {
+      final lastMsg = await ApiService().getLastMessage(agentId);
+      if (mounted && lastMsg != null) {
+        setState(() {
+          _lastMessages[agentId] = lastMsg;
+        });
+      }
+    } catch (_) {}
+  }
+
+  String _truncateMessage(String message, int maxLength) {
+    if (message.length <= maxLength) return message;
+    return '${message.substring(0, maxLength)}...';
+  }
+
+  void _clearUnreadForAgent(String agentId) {
+    setState(() {
+      _unreadCounts[agentId] = 0;
+    });
   }
 
   @override
@@ -1236,24 +1428,26 @@ class _AgentsMainScreenState extends State<AgentsMainScreen> {
                     final agent = _filteredAgents[index];
                     final isRunning = agent.status == 'running';
                     final isTelegram = agent.platform == 'telegram';
-                    final lastMsg = ChatMessage(
-                      role: 'system',
-                      content: isTelegram
-                          ? 'Limited: Telegram Mode'
-                          : 'Active connection to OS',
-                      timestamp: DateTime.now(),
-                      isRead: true,
-                    );
+                    final unreadCount = _unreadCounts[agent.id] ?? 0;
+                    final lastMsgContent = _lastMessages[agent.id];
+                    final displayMessage = isTelegram
+                        ? 'Limited: Telegram Mode'
+                        : (lastMsgContent != null && lastMsgContent.isNotEmpty
+                              ? _truncateMessage(lastMsgContent, 50)
+                              : 'Active connection to OS');
 
                     return GestureDetector(
                       onTap: isTelegram
                           ? null
-                          : () => Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => ChatScreen(agent: agent),
-                              ),
-                            ),
+                          : () {
+                              _clearUnreadForAgent(agent.id);
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => ChatScreen(agent: agent),
+                                ),
+                              );
+                            },
                       child: Container(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 16,
@@ -1272,6 +1466,7 @@ class _AgentsMainScreenState extends State<AgentsMainScreen> {
                           child: Row(
                             children: [
                               Stack(
+                                clipBehavior: Clip.none,
                                 children: [
                                   Container(
                                     width: 52,
@@ -1331,6 +1526,43 @@ class _AgentsMainScreenState extends State<AgentsMainScreen> {
                                         ),
                                       ),
                                     ),
+                                  if (unreadCount > 0)
+                                    Positioned(
+                                      right: -4,
+                                      top: -4,
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 6,
+                                          vertical: 2,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFFEF4444),
+                                          borderRadius: BorderRadius.circular(
+                                            10,
+                                          ),
+                                          border: Border.all(
+                                            color: Colors.black,
+                                            width: 1.5,
+                                          ),
+                                        ),
+                                        constraints: const BoxConstraints(
+                                          minWidth: 18,
+                                          minHeight: 18,
+                                        ),
+                                        child: Center(
+                                          child: Text(
+                                            unreadCount > 99
+                                                ? '99+'
+                                                : unreadCount.toString(),
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
                                 ],
                               ),
                               const SizedBox(width: 14),
@@ -1364,15 +1596,15 @@ class _AgentsMainScreenState extends State<AgentsMainScreen> {
                                       children: [
                                         Expanded(
                                           child: Text(
-                                            isTelegram
-                                                ? 'Managed via Telegram'
-                                                : lastMsg.content,
+                                            displayMessage,
                                             style: TextStyle(
                                               fontSize: 14,
                                               color: isTelegram
                                                   ? Colors.blueGrey
                                                   : const Color(0xFF71717A),
                                             ),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
                                           ),
                                         ),
                                       ],
@@ -1686,6 +1918,130 @@ class _ChatScreenState extends State<ChatScreen> {
     return '$role|||$content|||${normalizedFiles.join(',')}';
   }
 
+  /// Builds an image widget with error handling.
+  /// Supports both authenticated URLs and direct URLs from the server.
+  Widget _buildImageWidget(String url, String fileName) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: Image.network(
+        url,
+        headers: {'Authorization': 'Bearer ${ApiService().token}'},
+        loadingBuilder: (context, child, loadingProgress) {
+          if (loadingProgress == null) return child;
+          return Container(
+            height: 150,
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A1A1A),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Center(
+              child: CircularProgressIndicator(
+                value: loadingProgress.expectedTotalBytes != null
+                    ? loadingProgress.cumulativeBytesLoaded /
+                          loadingProgress.expectedTotalBytes!
+                    : null,
+              ),
+            ),
+          );
+        },
+        errorBuilder: (context, error, stackTrace) {
+          return Container(
+            height: 150,
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A1A1A),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(LucideIcons.imageOff, color: Colors.grey, size: 32),
+                  SizedBox(height: 8),
+                  Text(
+                    'Image unavailable',
+                    style: TextStyle(color: Colors.grey, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// Copies the full context window including skills and conversation history.
+  /// Ref: docs/context-window.md
+  void _copyContextWindow() async {
+    try {
+      final contextData = await ApiService().getAgentContextWindow(
+        widget.agent.id.toString(),
+      );
+
+      if (!mounted) return;
+
+      if (contextData != null) {
+        final buffer = StringBuffer();
+
+        if (contextData['systemPrompt'] != null) {
+          buffer.writeln('=== SYSTEM PROMPT ===');
+          buffer.writeln(contextData['systemPrompt']);
+          buffer.writeln();
+        }
+
+        if (contextData['skills'] != null) {
+          buffer.writeln('=== SKILLS ===');
+          final skills = contextData['skills'] as List<dynamic>;
+          for (final skill in skills) {
+            buffer.writeln('--- ${skill['title']} ---');
+            buffer.writeln(skill['content']);
+            buffer.writeln();
+          }
+        }
+
+        if (contextData['history'] != null) {
+          buffer.writeln('=== CONVERSATION HISTORY ===');
+          final history = contextData['history'] as List<dynamic>;
+          for (final entry in history) {
+            final role = entry['role'] ?? 'unknown';
+            final content = entry['content'] ?? '';
+            buffer.writeln('[$role]: $content');
+          }
+          buffer.writeln();
+        }
+
+        await Clipboard.setData(ClipboardData(text: buffer.toString()));
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Context window copied to clipboard'),
+              backgroundColor: Color(0xFF10B981),
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Failed to fetch context window'),
+              backgroundColor: Color(0xFFEF4444),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error copying context: $e'),
+            backgroundColor: const Color(0xFFEF4444),
+          ),
+        );
+      }
+    }
+  }
+
   void _showMetrics() async {
     final metrics = await ApiService().getAgentStats(
       widget.agent.id.toString(),
@@ -1856,6 +2212,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _showNotification(String body) async {
+    NotificationService().playNotificationSound();
     if (kIsWeb) return;
     const AndroidNotificationDetails androidPlatformChannelSpecifics =
         AndroidNotificationDetails(
@@ -2150,6 +2507,11 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
         ),
         actions: [
+          IconButton(
+            icon: const Icon(LucideIcons.copy, size: 20),
+            tooltip: 'Copy Context Window',
+            onPressed: _copyContextWindow,
+          ),
           PopupMenuButton<String>(
             icon: const Icon(LucideIcons.moreVertical, size: 20),
             color: const Color(0xFF18181B),
@@ -2404,13 +2766,7 @@ class _ChatScreenState extends State<ChatScreen> {
           fileWidgets.add(
             Padding(
               padding: const EdgeInsets.only(top: 8.0),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: Image.network(
-                  fileUrl,
-                  headers: {'Authorization': 'Bearer ${ApiService().token}'},
-                ),
-              ),
+              child: _buildImageWidget(fileUrl, file),
             ),
           );
         } else if (['mp4', 'webm'].contains(ext)) {
