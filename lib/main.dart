@@ -33,6 +33,42 @@ void main() async {
   runApp(const HermitChatApp());
 }
 
+class ChatBackgroundPreferences {
+  static const _prefix = 'chat_background_';
+
+  static Future<String> resolve(String agentId, String fallback) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('$_prefix$agentId') ?? fallback;
+  }
+
+  static Future<void> save(String agentId, String backgroundId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('$_prefix$agentId', backgroundId);
+  }
+
+  static Future<List<Agent>> applyToAgents(List<Agent> agents) async {
+    final prefs = await SharedPreferences.getInstance();
+    return agents
+        .map(
+          (agent) => Agent(
+            id: agent.id,
+            name: agent.name,
+            role: agent.role,
+            status: agent.status,
+            model: agent.model,
+            profilePic: agent.profilePic,
+            platform: agent.platform,
+            containerId: agent.containerId,
+            personality: agent.personality,
+            provider: agent.provider,
+            background:
+                prefs.getString('$_prefix${agent.id}') ?? agent.background,
+          ),
+        )
+        .toList();
+  }
+}
+
 class CalendarEventModel {
   final int id;
   final int agentId;
@@ -793,8 +829,12 @@ class _AgentsMainScreenState extends State<AgentsMainScreen> {
   Future<void> _loadAgents() async {
     final data = await ApiService().getAgents();
     if (mounted) {
+      final agents = await ChatBackgroundPreferences.applyToAgents(
+        data.map((json) => Agent.fromJson(json)).toList(),
+      );
+      if (!mounted) return;
       setState(() {
-        _agents = data.map((json) => Agent.fromJson(json)).toList();
+        _agents = agents;
         _filteredAgents = _agents;
         _isLoading = false;
       });
@@ -1121,6 +1161,9 @@ class _ChatScreenState extends State<ChatScreen> {
   final List<ChatMessage> _messages = [];
   StreamSubscription? _wsSubscription;
 
+  // Mutable background ID so it can be refreshed after the user saves config
+  late String _backgroundId;
+
   static final RegExp _tagPattern = RegExp(
     r'<([a-zA-Z_][a-zA-Z0-9_]*)>.*?</\1>',
     multiLine: true,
@@ -1417,6 +1460,8 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    _backgroundId = widget.agent.background;
+    _loadBackgroundPreference();
     // Load persisted offline copy of conversation
     _loadMessages();
 
@@ -1448,6 +1493,15 @@ class _ChatScreenState extends State<ChatScreen> {
         }
       }
     });
+  }
+
+  Future<void> _loadBackgroundPreference() async {
+    final backgroundId = await ChatBackgroundPreferences.resolve(
+      widget.agent.id,
+      widget.agent.background,
+    );
+    if (!mounted) return;
+    setState(() => _backgroundId = backgroundId);
   }
 
   /// Loads persisted messages from SharedPreferences (offline copy).
@@ -1686,10 +1740,10 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  /// Returns the background painter based on the agent's saved preference.
-  /// See ChatBackgroundPainter for all available backgrounds.
+  /// Returns the background painter based on the mutable _backgroundId.
+  /// This updates after the user saves changes in the config screen.
   CustomPainter _resolveBackgroundPainter() {
-    return ChatBackgroundPainter.forId(widget.agent.background);
+    return ChatBackgroundPainter.forId(_backgroundId);
   }
 
   // Deleted duplicate _buildInputArea
@@ -1801,7 +1855,16 @@ class _ChatScreenState extends State<ChatScreen> {
                       builder: (_) =>
                           CreateAgentScreen(existingAgent: widget.agent),
                     ),
-                  );
+                  ).then((_) async {
+                    if (!mounted) return;
+                    final updatedBackground =
+                        await ChatBackgroundPreferences.resolve(
+                          widget.agent.id,
+                          _backgroundId,
+                        );
+                    if (!mounted) return;
+                    setState(() => _backgroundId = updatedBackground);
+                  });
                   break;
               }
             },
@@ -2375,90 +2438,198 @@ class ChatBackgroundPainter {
   }
 }
 
-// ─── Doodle (original, WhatsApp-style chat icons) ────────────────────────────
+// ─── Doodle (Telegram/WhatsApp-inspired, but distinct) ──────────────────────
 class _DoodleBackgroundPainter extends CustomPainter {
+  void _drawRoundedDiamond(
+    Canvas canvas,
+    Paint paint,
+    Offset center,
+    double radius,
+  ) {
+    final path = Path()
+      ..moveTo(center.dx, center.dy - radius)
+      ..quadraticBezierTo(
+        center.dx + radius * 0.9,
+        center.dy - radius * 0.9,
+        center.dx + radius,
+        center.dy,
+      )
+      ..quadraticBezierTo(
+        center.dx + radius * 0.9,
+        center.dy + radius * 0.9,
+        center.dx,
+        center.dy + radius,
+      )
+      ..quadraticBezierTo(
+        center.dx - radius * 0.9,
+        center.dy + radius * 0.9,
+        center.dx - radius,
+        center.dy,
+      )
+      ..quadraticBezierTo(
+        center.dx - radius * 0.9,
+        center.dy - radius * 0.9,
+        center.dx,
+        center.dy - radius,
+      )
+      ..close();
+    canvas.drawPath(path, paint);
+  }
+
+  void _drawPaperPlane(Canvas canvas, Paint paint, Offset center, double size) {
+    final path = Path()
+      ..moveTo(center.dx - size * 0.95, center.dy + size * 0.15)
+      ..lineTo(center.dx + size, center.dy - size * 0.1)
+      ..lineTo(center.dx - size * 0.15, center.dy + size * 0.95)
+      ..lineTo(center.dx + size * 0.05, center.dy + size * 0.28)
+      ..close();
+    canvas.drawPath(path, paint);
+    canvas.drawLine(
+      Offset(center.dx + size * 0.05, center.dy + size * 0.28),
+      Offset(center.dx - size * 0.48, center.dy + size * 0.02),
+      paint,
+    );
+  }
+
+  void _drawCrescent(Canvas canvas, Paint paint, Offset center, double radius) {
+    final outer = Path()
+      ..addOval(Rect.fromCircle(center: center, radius: radius));
+    final inner = Path()
+      ..addOval(
+        Rect.fromCircle(
+          center: Offset(center.dx + radius * 0.42, center.dy - radius * 0.08),
+          radius: radius * 0.82,
+        ),
+      );
+    final path = Path.combine(PathOperation.difference, outer, inner);
+    canvas.drawPath(path, paint);
+  }
+
+  void _drawSpark(Canvas canvas, Paint paint, Offset center, double radius) {
+    final path = Path()
+      ..moveTo(center.dx, center.dy - radius)
+      ..lineTo(center.dx + radius * 0.28, center.dy - radius * 0.28)
+      ..lineTo(center.dx + radius, center.dy)
+      ..lineTo(center.dx + radius * 0.28, center.dy + radius * 0.28)
+      ..lineTo(center.dx, center.dy + radius)
+      ..lineTo(center.dx - radius * 0.28, center.dy + radius * 0.28)
+      ..lineTo(center.dx - radius, center.dy)
+      ..lineTo(center.dx - radius * 0.28, center.dy - radius * 0.28)
+      ..close();
+    canvas.drawPath(path, paint);
+  }
+
+  void _drawArcWave(Canvas canvas, Paint paint, Offset start, double width) {
+    final path = Path()..moveTo(start.dx, start.dy);
+    final segment = width / 3;
+    for (int i = 0; i < 3; i++) {
+      final x0 = start.dx + segment * i;
+      final x1 = x0 + segment;
+      path.quadraticBezierTo(
+        x0 + segment / 2,
+        start.dy - (i.isEven ? 10 : 7),
+        x1,
+        start.dy,
+      );
+    }
+    canvas.drawPath(path, paint);
+  }
+
+  void _drawLoop(Canvas canvas, Paint paint, Offset center, Size size) {
+    final path = Path()
+      ..addOval(
+        Rect.fromCenter(center: center, width: size.width, height: size.height),
+      );
+    canvas.drawPath(path, paint);
+  }
+
   @override
   void paint(Canvas canvas, Size size) {
-    final blackPaint = Paint()..color = const Color(0xFF000000);
-    canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height), blackPaint);
-
-    final lightPaint1 = Paint()
-      ..color = const Color(0x0FFFFFFF)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 100);
-    canvas.drawCircle(
-      Offset(size.width * 0.2, size.height * 0.2),
-      size.width * 0.4,
-      lightPaint1,
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      Paint()..color = const Color(0xFF000000),
     );
 
-    final lightPaint2 = Paint()
-      ..color = const Color(0x0AFFFFFF)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 120);
-    canvas.drawCircle(
-      Offset(size.width * 0.8, size.height * 0.7),
-      size.width * 0.5,
-      lightPaint2,
-    );
-
-    final doodlePaint = Paint()
-      ..color = const Color(0x14FFFFFF)
-      ..strokeWidth = 1.4
-      ..style = PaintingStyle.stroke;
-
-    // Chat bubble doodle shapes
-    final path1 = Path();
-    path1.moveTo(size.width * 0.1, size.height * 0.15);
-    path1.lineTo(size.width * 0.3, size.height * 0.15);
-    path1.quadraticBezierTo(size.width * 0.35, size.height * 0.15, size.width * 0.38, size.height * 0.21);
-    path1.lineTo(size.width * 0.38, size.height * 0.25);
-    path1.quadraticBezierTo(size.width * 0.38, size.height * 0.31, size.width * 0.3, size.height * 0.31);
-    path1.lineTo(size.width * 0.18, size.height * 0.35);
-    path1.lineTo(size.width * 0.12, size.height * 0.4);
-    path1.lineTo(size.width * 0.18, size.height * 0.4);
-    path1.lineTo(size.width * 0.26, size.height * 0.35);
-    path1.quadraticBezierTo(size.width * 0.26, size.height * 0.31, size.width * 0.3, size.height * 0.31);
-    canvas.drawPath(path1, doodlePaint);
-
-    final rectPaint = Paint()
-      ..color = const Color(0x14FFFFFF)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.4;
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(size.width * 0.65, size.height * 0.08, size.width * 0.09, size.height * 0.09),
-        const Radius.circular(2),
+    for (final (center, color, radius) in [
+      (
+        Offset(size.width * 0.18, size.height * 0.2),
+        const Color(0x06BFE9FF),
+        size.width * 0.42,
       ),
-      rectPaint,
-    );
-
-    final triPath = Path();
-    triPath.moveTo(size.width * 0.68, size.height * 0.55);
-    triPath.lineTo(size.width * 0.75, size.height * 0.65);
-    triPath.lineTo(size.width * 0.61, size.height * 0.65);
-    triPath.close();
-    canvas.drawPath(triPath, doodlePaint);
-
-    final wavePath = Path();
-    wavePath.moveTo(size.width * 0.05, size.height * 0.75);
-    wavePath.quadraticBezierTo(size.width * 0.1, size.height * 0.7, size.width * 0.15, size.height * 0.75);
-    wavePath.quadraticBezierTo(size.width * 0.2, size.height * 0.8, size.width * 0.25, size.height * 0.75);
-    wavePath.quadraticBezierTo(size.width * 0.3, size.height * 0.7, size.width * 0.35, size.height * 0.75);
-    canvas.drawPath(wavePath, doodlePaint);
-
-    final dotPaint = Paint()..color = const Color(0x14FFFFFF);
-    for (final offset in [
-      Offset(size.width * 0.75, size.height * 0.35),
-      Offset(size.width * 0.35, size.height * 0.1),
-      Offset(size.width * 0.15, size.height * 0.55),
+      (
+        Offset(size.width * 0.84, size.height * 0.74),
+        const Color(0x051EE3CF),
+        size.width * 0.46,
+      ),
     ]) {
-      canvas.drawCircle(offset, 2, dotPaint);
+      canvas.drawCircle(
+        center,
+        radius,
+        Paint()
+          ..color = color
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 110),
+      );
     }
 
-    final checkPath = Path();
-    checkPath.moveTo(size.width * 0.55, size.height * 0.75);
-    checkPath.lineTo(size.width * 0.58, size.height * 0.78);
-    checkPath.lineTo(size.width * 0.63, size.height * 0.68);
-    canvas.drawPath(checkPath, doodlePaint);
+    final paint = Paint()
+      ..color = const Color(0x12F4FBFF)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    final w = size.width;
+    final h = size.height;
+
+    _drawPaperPlane(canvas, paint, Offset(w * 0.16, h * 0.13), w * 0.036);
+    _drawPaperPlane(canvas, paint, Offset(w * 0.82, h * 0.27), w * 0.028);
+    _drawPaperPlane(canvas, paint, Offset(w * 0.26, h * 0.82), w * 0.03);
+
+    _drawCrescent(canvas, paint, Offset(w * 0.83, h * 0.13), w * 0.034);
+    _drawCrescent(canvas, paint, Offset(w * 0.13, h * 0.63), w * 0.026);
+
+    _drawRoundedDiamond(canvas, paint, Offset(w * 0.44, h * 0.16), w * 0.026);
+    _drawRoundedDiamond(canvas, paint, Offset(w * 0.72, h * 0.58), w * 0.022);
+    _drawRoundedDiamond(canvas, paint, Offset(w * 0.28, h * 0.4), w * 0.019);
+
+    _drawSpark(canvas, paint, Offset(w * 0.62, h * 0.12), w * 0.024);
+    _drawSpark(canvas, paint, Offset(w * 0.9, h * 0.72), w * 0.018);
+    _drawSpark(canvas, paint, Offset(w * 0.18, h * 0.92), w * 0.018);
+
+    _drawArcWave(canvas, paint, Offset(w * 0.08, h * 0.26), w * 0.26);
+    _drawArcWave(canvas, paint, Offset(w * 0.58, h * 0.42), w * 0.2);
+    _drawArcWave(canvas, paint, Offset(w * 0.3, h * 0.72), w * 0.24);
+
+    _drawLoop(
+      canvas,
+      paint,
+      Offset(w * 0.52, h * 0.3),
+      Size(w * 0.11, h * 0.045),
+    );
+    _drawLoop(
+      canvas,
+      paint,
+      Offset(w * 0.76, h * 0.87),
+      Size(w * 0.13, h * 0.05),
+    );
+    _drawLoop(
+      canvas,
+      paint,
+      Offset(w * 0.18, h * 0.5),
+      Size(w * 0.09, h * 0.038),
+    );
+
+    final dotPaint = Paint()..color = const Color(0x14F8FDFF);
+    for (final offset in [
+      Offset(w * 0.34, h * 0.08),
+      Offset(w * 0.69, h * 0.2),
+      Offset(w * 0.49, h * 0.49),
+      Offset(w * 0.11, h * 0.78),
+      Offset(w * 0.59, h * 0.95),
+      Offset(w * 0.87, h * 0.52),
+    ]) {
+      canvas.drawCircle(offset, 2.1, dotPaint);
+    }
   }
 
   @override
@@ -3018,15 +3189,15 @@ class _CreateAgentScreenState extends State<CreateAgentScreen> {
   final ImagePicker _picker = ImagePicker();
 
   static const List<Map<String, String>> _backgrounds = [
-    {'id': 'doodle',   'name': 'Doodle',   'desc': 'Chat bubbles & icons'},
-    {'id': 'minimal',  'name': 'Minimal',  'desc': 'Subtle diagonal lines'},
+    {'id': 'doodle', 'name': 'Doodle', 'desc': 'Planes, crescents & waves'},
+    {'id': 'minimal', 'name': 'Minimal', 'desc': 'Subtle diagonal lines'},
     {'id': 'gradient', 'name': 'Gradient', 'desc': 'Dark purple-teal glow'},
-    {'id': 'grid',     'name': 'Grid',     'desc': 'Dot-grid pattern'},
-    {'id': 'dots',     'name': 'Dots',     'desc': 'Staggered polka dots'},
-    {'id': 'waves',    'name': 'Waves',    'desc': 'Horizontal wave lines'},
-    {'id': 'hexagon',  'name': 'Hexagon',  'desc': 'Honeycomb grid'},
-    {'id': 'circuit',  'name': 'Circuit',  'desc': 'PCB trace lines'},
-    {'id': 'aurora',   'name': 'Aurora',   'desc': 'Northern lights'},
+    {'id': 'grid', 'name': 'Grid', 'desc': 'Dot-grid pattern'},
+    {'id': 'dots', 'name': 'Dots', 'desc': 'Staggered polka dots'},
+    {'id': 'waves', 'name': 'Waves', 'desc': 'Horizontal wave lines'},
+    {'id': 'hexagon', 'name': 'Hexagon', 'desc': 'Honeycomb grid'},
+    {'id': 'circuit', 'name': 'Circuit', 'desc': 'PCB trace lines'},
+    {'id': 'aurora', 'name': 'Aurora', 'desc': 'Northern lights'},
   ];
 
   @override
@@ -3044,6 +3215,18 @@ class _CreateAgentScreenState extends State<CreateAgentScreen> {
     _platform = widget.existingAgent?.platform ?? 'hermitchat';
     _background = widget.existingAgent?.background ?? 'doodle';
     _profilePicUrl = widget.existingAgent?.profilePic;
+    _loadSavedBackground();
+  }
+
+  Future<void> _loadSavedBackground() async {
+    final existingAgent = widget.existingAgent;
+    if (existingAgent == null) return;
+    final background = await ChatBackgroundPreferences.resolve(
+      existingAgent.id,
+      existingAgent.background,
+    );
+    if (!mounted) return;
+    setState(() => _background = background);
   }
 
   Future<void> _pickImage(bool isProfile) async {
@@ -3089,20 +3272,31 @@ class _CreateAgentScreenState extends State<CreateAgentScreen> {
     }
 
     bool success = false;
+    String? savedAgentId;
     if (widget.existingAgent != null) {
       success = await ApiService().updateAgent(
         widget.existingAgent!.id,
         payload,
       );
+      if (success) {
+        savedAgentId = widget.existingAgent!.id;
+      }
     } else {
       final result = await ApiService().createAgent(payload);
       success = result != null && result['success'] == true;
+      if (success && result['id'] != null) {
+        savedAgentId = result['id'].toString();
+      }
     }
 
     if (!mounted) return;
     setState(() => _isDeploying = false);
 
     if (success) {
+      if (savedAgentId != null) {
+        await ChatBackgroundPreferences.save(savedAgentId, _background);
+      }
+      if (!mounted) return;
       Navigator.pop(context);
     } else {
       ScaffoldMessenger.of(
