@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:async';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:image_picker/image_picker.dart'; // XFile
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:encrypt/encrypt.dart' as enc;
@@ -33,34 +33,33 @@ class ApiService {
   String _encrypt(String text) {
     try {
       final key = _deriveKey("hermit123");
-      final iv = enc.IV.fromSecureRandom(12); // GCM typical nonce size
-      final benc = enc.Encrypter(
-        enc.AES(key, mode: enc.AESMode.gcm, padding: null),
-      );
+      final iv = enc.IV.fromSecureRandom(16);
+      final benc = enc.Encrypter(enc.AES(key, mode: enc.AESMode.cbc));
       final encrypted = benc.encrypt(text, iv: iv);
-      // Combine IV + Ciphertext for the server
-      return "enc:${base64.encode(iv.bytes + encrypted.bytes)}";
+      return "cbc:${base64.encode(iv.bytes + encrypted.bytes)}";
     } catch (e) {
-      // log error
       return text;
     }
   }
 
   String _decrypt(String ciphertext) {
-    if (!ciphertext.startsWith("enc:")) return ciphertext;
     try {
       final key = _deriveKey("hermit123");
-      final data = base64.decode(ciphertext.substring(4));
-      final iv = enc.IV(data.sublist(0, 12));
-      final encryptedBytes = data.sublist(12);
-      final benc = enc.Encrypter(
-        enc.AES(key, mode: enc.AESMode.gcm, padding: null),
-      );
-      return benc.decrypt(enc.Encrypted(encryptedBytes), iv: iv);
+
+      if (ciphertext.startsWith("cbc:")) {
+        final data = base64.decode(ciphertext.substring(4));
+        final iv = enc.IV(Uint8List.fromList(data.sublist(0, 16)));
+        final encryptedBytes = Uint8List.fromList(data.sublist(16));
+        final benc = enc.Encrypter(enc.AES(key, mode: enc.AESMode.cbc));
+        return benc.decrypt(enc.Encrypted(encryptedBytes), iv: iv);
+      } else if (ciphertext.startsWith("enc:")) {
+        // Old GCM format - just return as-is, server will handle
+        return ciphertext;
+      }
     } catch (e) {
-      // log error
-      return ciphertext;
+      // Log error
     }
+    return ciphertext;
   }
 
   Future<void> init() async {
@@ -210,9 +209,16 @@ class ApiService {
           data['message'] = _decrypt(data['message']);
         }
         return data;
+      } else {
+        // Return error info so the client can display meaningful messages
+        final body = jsonDecode(response.body);
+        if (body is Map && body['error'] != null) {
+          return {'error': body['error'], 'statusCode': response.statusCode};
+        }
       }
     } catch (e) {
-      // log error
+      // Log error for debugging
+      debugPrint('sendMessage error: $e');
     }
     return null;
   }
@@ -568,5 +574,55 @@ class ApiService {
       // log error
     }
     return null;
+  }
+
+  Future<bool> markMessagesSeen(String agentId) async {
+    if (baseUrl == null) return false;
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/api/agents/$agentId/mark-seen'),
+            headers: _headers,
+          )
+          .timeout(const Duration(seconds: 5));
+
+      return response.statusCode == 200;
+    } catch (e) {
+      // log error
+    }
+    return false;
+  }
+
+  Future<bool> checkServerConnection() async {
+    if (baseUrl == null) return false;
+    try {
+      final response = await http
+          .get(Uri.parse('$baseUrl/api/time'), headers: _headers)
+          .timeout(const Duration(seconds: 5));
+      return response.statusCode == 200;
+    } catch (e) {
+      // log error
+    }
+    return false;
+  }
+
+  Future<Map<String, dynamic>?> getLocalSettings() async {
+    if (baseUrl == null) return null;
+    try {
+      final response = await http
+          .get(Uri.parse('$baseUrl/api/settings'), headers: _headers)
+          .timeout(const Duration(seconds: 5));
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+    } catch (e) {
+      // log error
+    }
+    return null;
+  }
+
+  bool get hasApiKey {
+    // Check if any API key is configured
+    return _headers.containsKey('Authorization') && token != null;
   }
 }

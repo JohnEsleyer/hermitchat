@@ -1822,6 +1822,24 @@ class _ChatScreenState extends State<ChatScreen> {
           isRead: true,
         ),
       );
+    });
+    _persistMessages();
+    _scrollToBottom();
+
+    // /status command: works offline with local info
+    if (commandName == '/status') {
+      await _handleStatusCommand();
+      return;
+    }
+
+    // /clear command: clears conversation locally, sends to server if online
+    if (commandName == '/clear') {
+      await _handleClearCommand();
+      return;
+    }
+
+    // Other slash commands: expect a response from server
+    setState(() {
       _messages.add(
         ChatMessage(
           role: 'system',
@@ -1870,6 +1888,123 @@ class _ChatScreenState extends State<ChatScreen> {
     });
     _persistMessages();
     _scrollToBottom();
+  }
+
+  /// Handles /status command - works offline with local info
+  Future<void> _handleStatusCommand() async {
+    final api = ApiService();
+    final isOnline = await api.checkServerConnection();
+    final agent = widget.agent;
+
+    String statusMessage = '🤖 *Agent Status: ${agent.name}*\n\n';
+
+    // Server connection
+    statusMessage += '📡 *Connection*\n';
+    statusMessage += '• Server: ${isOnline ? 'Connected ✅' : 'Offline ❌'}\n';
+    statusMessage += '• URL: ${api.baseUrl ?? 'Not configured'}\n';
+
+    // API Key status
+    statusMessage += '\n🔑 *API Configuration*\n';
+    final hasApiKey = api.token != null && api.token!.isNotEmpty;
+    statusMessage +=
+        '• API Key: ${hasApiKey ? 'Configured ✅' : 'Not configured ❌'}\n';
+
+    // LLM Settings from agent config
+    statusMessage += '\n🤖 *LLM Configuration*\n';
+    statusMessage +=
+        '• Provider: ${agent.provider.isNotEmpty ? agent.provider : 'N/A'}\n';
+    statusMessage +=
+        '• Model: ${agent.model.isNotEmpty ? agent.model : 'N/A'}\n';
+    statusMessage +=
+        '• LLM Ready: ${hasApiKey && agent.model.isNotEmpty ? 'Yes ✅' : 'No ❌'}\n';
+
+    // Container info
+    statusMessage += '\n🐳 *Container*\n';
+    statusMessage +=
+        '• Container ID: ${agent.containerId.isNotEmpty ? agent.containerId : 'N/A'}\n';
+    statusMessage +=
+        '• Status: ${agent.containerId.isNotEmpty ? agent.status : 'N/A'}\n';
+
+    // Try to get more info from server if online
+    if (isOnline) {
+      final settings = await api.getLocalSettings();
+      if (settings != null) {
+        // Server returns boolean values for key existence
+        final hasOpenrouter =
+            settings['openrouterKey'] == true ||
+            settings['openrouterKey'] == 'true';
+        final hasOpenai =
+            settings['openaiKey'] == true || settings['openaiKey'] == 'true';
+        final hasAnthropic =
+            settings['anthropicKey'] == true ||
+            settings['anthropicKey'] == 'true';
+        final hasGemini =
+            settings['geminiKey'] == true || settings['geminiKey'] == 'true';
+
+        statusMessage += '\n🔐 *API Keys*\n';
+        statusMessage +=
+            '• OpenRouter: ${hasOpenrouter ? 'Configured ✅' : 'Not set'}\n';
+        statusMessage +=
+            '• OpenAI: ${hasOpenai ? 'Configured ✅' : 'Not set'}\n';
+        statusMessage +=
+            '• Anthropic: ${hasAnthropic ? 'Configured ✅' : 'Not set'}\n';
+        statusMessage +=
+            '• Gemini: ${hasGemini ? 'Configured ✅' : 'Not set'}\n';
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _messages.add(
+        ChatMessage(
+          role: 'system',
+          content: statusMessage,
+          timestamp: DateTime.now(),
+          isRead: true,
+        ),
+      );
+    });
+    _persistMessages();
+    _scrollToBottom();
+  }
+
+  /// Handles /clear command - clears locally, syncs with server if online
+  Future<void> _handleClearCommand() async {
+    setState(() {
+      _messages.add(
+        ChatMessage(
+          role: 'system',
+          content: 'Clearing conversation...',
+          timestamp: DateTime.now(),
+          isRead: true,
+        ),
+      );
+    });
+    _persistMessages();
+    _scrollToBottom();
+
+    // Try to send to server, but clear locally regardless
+    await ApiService().sendMessage(widget.agent.id.toString(), '/clear');
+
+    if (!mounted) return;
+
+    // Clear locally
+    await Future.delayed(const Duration(milliseconds: 200));
+
+    if (mounted) {
+      setState(() {
+        _messages.clear();
+        _messages.add(
+          ChatMessage(
+            role: 'system',
+            content: '✅ Conversation cleared. Context window reset.',
+            timestamp: DateTime.now(),
+            isRead: true,
+          ),
+        );
+      });
+      _persistMessages();
+    }
   }
 
   String _encodeStoredMessage(ChatMessage message) {
@@ -2112,10 +2247,23 @@ class _ChatScreenState extends State<ChatScreen> {
         if (contextData['history'] != null) {
           buffer.writeln('=== CONVERSATION HISTORY ===');
           final history = contextData['history'] as List<dynamic>;
-          for (final entry in history) {
+          final reversedHistory = history.reversed.toList();
+          for (final entry in reversedHistory) {
             final role = entry['role'] ?? 'unknown';
             final content = entry['content'] ?? '';
-            buffer.writeln('[$role]: $content');
+            final timestamp = entry['timestamp'] ?? '';
+            // Format timestamp (e.g., "2026-03-22 15:30:00")
+            String timestampStr = '';
+            if (timestamp.isNotEmpty && timestamp != 'null') {
+              try {
+                final dt = DateTime.parse(timestamp.toString());
+                timestampStr =
+                    '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+              } catch (_) {
+                timestampStr = timestamp.toString();
+              }
+            }
+            buffer.writeln('[$timestampStr $role]: $content');
           }
           buffer.writeln();
         }
@@ -2197,6 +2345,9 @@ class _ChatScreenState extends State<ChatScreen> {
     _loadBackgroundPreference();
     _loadSystemVisibilityPreference();
     _loadMessages();
+
+    // Mark messages as seen when conversation is opened
+    ApiService().markMessagesSeen(widget.agent.id.toString());
 
     // Reference: HermitShell/docs/frontend-backend-communication.md.
     _wsSubscription = ApiService().messageStream.listen((data) {
@@ -2410,36 +2561,41 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() {
       _isSending = false;
       if (response != null) {
-        String message =
-            response['message'] as String? ??
-            response['response'] as String? ??
-            '';
-
-        if (_takeoverMode && _containsTags(message)) {
-          message = message.replaceAll(_tagPattern, '[Tag rejected]');
+        // Check for error responses from the server
+        final errorMsg = response['error'] as String?;
+        if (errorMsg != null) {
           _messages.add(
             ChatMessage(
               role: 'system',
-              content: '<end>',
+              content: 'Error: $errorMsg',
               timestamp: DateTime.now(),
               isRead: true,
             ),
           );
+          _persistMessages();
+          _scrollToBottom();
+          return;
         }
 
-        if (!isSystemExecution) {
-          final filesDynamic = response['files'] as List<dynamic>? ?? [];
-          final files = filesDynamic.map((f) => f.toString()).toList();
+        // Assistant messages are received via WebSocket broadcast (new_message event)
+        // Only handle non-assistant responses here (system messages, etc.)
+        final role = response['role'] as String?;
+        if (role != 'assistant' && !isSystemExecution) {
+          String message =
+              response['message'] as String? ??
+              response['response'] as String? ??
+              '';
 
-          _messages.add(
-            ChatMessage(
-              role: 'assistant',
-              content: message,
-              timestamp: DateTime.now(),
-              isRead: true,
-              files: files.isNotEmpty ? files : null,
-            ),
-          );
+          if (message.isNotEmpty) {
+            _messages.add(
+              ChatMessage(
+                role: role ?? 'system',
+                content: message,
+                timestamp: DateTime.now(),
+                isRead: true,
+              ),
+            );
+          }
         }
       } else {
         // In takeover mode the user is pretending to be the agent.
@@ -4821,10 +4977,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
               settings['tunnelEnabled'] == 'true';
           _tunnelUrl = settings['tunnelURL'] ?? '';
           _timeOffset = settings['timeOffset']?.toString() ?? '0';
-          _openrouterController.text = settings['openrouterKey'] ?? '';
-          _openaiController.text = settings['openaiKey'] ?? '';
-          _anthropicController.text = settings['anthropicKey'] ?? '';
-          _geminiController.text = settings['geminiKey'] ?? '';
+          // Only update text fields if the value is a non-empty string (actual key value)
+          // Server returns boolean for key existence, which should NOT overwrite user input
+          if (settings['openrouterKey'] is String &&
+              (settings['openrouterKey'] as String).isNotEmpty) {
+            _openrouterController.text = settings['openrouterKey'];
+          }
+          if (settings['openaiKey'] is String &&
+              (settings['openaiKey'] as String).isNotEmpty) {
+            _openaiController.text = settings['openaiKey'];
+          }
+          if (settings['anthropicKey'] is String &&
+              (settings['anthropicKey'] as String).isNotEmpty) {
+            _anthropicController.text = settings['anthropicKey'];
+          }
+          if (settings['geminiKey'] is String &&
+              (settings['geminiKey'] as String).isNotEmpty) {
+            _geminiController.text = settings['geminiKey'];
+          }
         });
       }
     } finally {
