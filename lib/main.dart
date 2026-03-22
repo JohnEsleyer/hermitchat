@@ -1734,6 +1734,10 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _showCommands = false;
   bool _showSystemResponses = true;
 
+  // Typewriter effect state - tracks typing progress for messages
+  final Map<int, String> _typewriterTexts = {};
+  final Map<int, Timer?> _typewriterTimers = {};
+
   // Offline message store — persisted locally and synced with server
   // Ref: docs/chat_persistence.md
   final List<ChatMessage> _messages = [];
@@ -2377,11 +2381,12 @@ class _ChatScreenState extends State<ChatScreen> {
 
       if (eventType == 'new_message') {
         final files = _extractFiles(data['files']);
-        final signature = _messageSignature(
-          data['role']?.toString() ?? 'assistant',
-          data['content']?.toString() ?? '',
-          files,
-        );
+        final content = data['content']?.toString() ?? '';
+        final role = data['role']?.toString() ?? 'assistant';
+        final signature = _messageSignature(role, content, files);
+
+        final isAssistant = role == 'assistant';
+
         setState(() {
           if (!_messages.any(
             (message) =>
@@ -2392,26 +2397,62 @@ class _ChatScreenState extends State<ChatScreen> {
                 ) ==
                 signature,
           )) {
-            _messages.add(
-              ChatMessage(
-                role: data['role']?.toString() ?? 'assistant',
-                content: data['content']?.toString() ?? '',
-                timestamp: DateTime.now(),
-                isRead: true,
-                files: files.isEmpty ? null : files,
-              ),
+            final newMessage = ChatMessage(
+              role: role,
+              content: content,
+              timestamp: DateTime.now(),
+              isRead: true,
+              files: files.isEmpty ? null : files,
             );
+            _messages.add(newMessage);
             _persistMessages();
             _scrollToBottom();
+
+            // Start typewriter effect for assistant messages
+            if (isAssistant && content.isNotEmpty) {
+              _startTypewriter(_messages.length - 1, content);
+            }
           }
         });
 
-        if (data['role'] == 'assistant' &&
-            (data['content']?.toString().isNotEmpty ?? false)) {
-          _showNotification(data['content'].toString());
+        if (isAssistant && content.isNotEmpty) {
+          _showNotification(content);
         }
       }
     });
+  }
+
+  void _startTypewriter(int messageIndex, String fullText) {
+    // Cancel any existing timer for this message
+    _typewriterTimers[messageIndex]?.cancel();
+
+    // Start with empty text
+    _typewriterTexts[messageIndex] = '';
+
+    // Calculate character delay based on text length (faster for longer texts)
+    final charDelay = fullText.length > 100
+        ? 10
+        : (fullText.length > 50 ? 15 : 20);
+    int charIndex = 0;
+
+    _typewriterTimers[messageIndex] = Timer.periodic(
+      Duration(milliseconds: charDelay),
+      (timer) {
+        if (!mounted) {
+          timer.cancel();
+          return;
+        }
+        charIndex++;
+        if (charIndex >= fullText.length) {
+          timer.cancel();
+          _typewriterTexts[messageIndex] = fullText;
+          setState(() {});
+        } else {
+          _typewriterTexts[messageIndex] = fullText.substring(0, charIndex);
+          setState(() {});
+        }
+      },
+    );
   }
 
   Future<void> _loadBackgroundPreference() async {
@@ -2634,6 +2675,10 @@ class _ChatScreenState extends State<ChatScreen> {
     _wsSubscription?.cancel();
     _controller.dispose();
     _scrollController.dispose();
+    // Cancel all typewriter timers
+    for (final timer in _typewriterTimers.values) {
+      timer?.cancel();
+    }
     super.dispose();
   }
 
@@ -2849,25 +2894,6 @@ class _ChatScreenState extends State<ChatScreen> {
                   ],
                 ),
               ),
-              PopupMenuItem(
-                value: 'show_system',
-                child: Row(
-                  children: [
-                    Icon(
-                      _showSystemResponses
-                          ? LucideIcons.eye
-                          : LucideIcons.eyeOff,
-                      size: 18,
-                      color: Colors.white,
-                    ),
-                    const SizedBox(width: 12),
-                    Text(
-                      _showSystemResponses ? 'Hide System' : 'Show System',
-                      style: const TextStyle(color: Colors.white),
-                    ),
-                  ],
-                ),
-              ),
               const PopupMenuItem(
                 value: 'metrics',
                 child: Row(
@@ -3012,7 +3038,8 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             if (msg.content.isNotEmpty)
               Text(
-                msg.content,
+                // Use typewriter text for assistant messages, full text otherwise
+                _typewriterTexts[_visibleMessages.indexOf(msg)] ?? msg.content,
                 style: TextStyle(color: textColor, fontSize: 15, height: 1.3),
               ),
             const SizedBox(height: 4),
@@ -3270,6 +3297,34 @@ class _ChatScreenState extends State<ChatScreen> {
                     }
                     return const Color(0xFF52525B);
                   }),
+                ),
+                const SizedBox(width: 12),
+                GestureDetector(
+                  onTap: () => setState(
+                    () => _showSystemResponses = !_showSystemResponses,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        _showSystemResponses
+                            ? LucideIcons.eye
+                            : LucideIcons.eyeOff,
+                        size: 14,
+                        color: const Color(0xFF52525B),
+                      ),
+                      const SizedBox(width: 4),
+                      const Text(
+                        'sys',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF52525B),
+                          letterSpacing: 1,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
                 const Spacer(),
                 if (_takeoverMode)
@@ -4977,23 +5032,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
               settings['tunnelEnabled'] == 'true';
           _tunnelUrl = settings['tunnelURL'] ?? '';
           _timeOffset = settings['timeOffset']?.toString() ?? '0';
-          // Only update text fields if the value is a non-empty string (actual key value)
-          // Server returns boolean for key existence, which should NOT overwrite user input
-          if (settings['openrouterKey'] is String &&
-              (settings['openrouterKey'] as String).isNotEmpty) {
-            _openrouterController.text = settings['openrouterKey'];
+          // Update text fields with actual key values from server
+          final openrouterKey = settings['openrouterKey']?.toString() ?? '';
+          final openaiKey = settings['openaiKey']?.toString() ?? '';
+          final anthropicKey = settings['anthropicKey']?.toString() ?? '';
+          final geminiKey = settings['geminiKey']?.toString() ?? '';
+
+          if (openrouterKey.isNotEmpty) {
+            _openrouterController.text = openrouterKey;
           }
-          if (settings['openaiKey'] is String &&
-              (settings['openaiKey'] as String).isNotEmpty) {
-            _openaiController.text = settings['openaiKey'];
+          if (openaiKey.isNotEmpty) {
+            _openaiController.text = openaiKey;
           }
-          if (settings['anthropicKey'] is String &&
-              (settings['anthropicKey'] as String).isNotEmpty) {
-            _anthropicController.text = settings['anthropicKey'];
+          if (anthropicKey.isNotEmpty) {
+            _anthropicController.text = anthropicKey;
           }
-          if (settings['geminiKey'] is String &&
-              (settings['geminiKey'] as String).isNotEmpty) {
-            _geminiController.text = settings['geminiKey'];
+          if (geminiKey.isNotEmpty) {
+            _geminiController.text = geminiKey;
           }
         });
       }
