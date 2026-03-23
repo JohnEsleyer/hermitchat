@@ -162,13 +162,9 @@ class CalendarScreen extends StatefulWidget {
   State<CalendarScreen> createState() => _CalendarScreenState();
 }
 
-class _CalendarScreenState extends State<CalendarScreen>
-    with SingleTickerProviderStateMixin {
-  static const _monthPageAnchor = 600;
-
-  late final TabController _tabController;
-  late final PageController _monthController;
+class _CalendarScreenState extends State<CalendarScreen> {
   final DateTime _today = DateTime.now();
+  DateTime _currentMonth = DateTime.now();
   DateTime? _selectedDate;
   List<CalendarEventModel> _events = [];
   bool _isLoading = true;
@@ -177,16 +173,7 @@ class _CalendarScreenState extends State<CalendarScreen>
   void initState() {
     super.initState();
     _selectedDate = DateTime(_today.year, _today.month, _today.day);
-    _tabController = TabController(length: 2, vsync: this);
-    _monthController = PageController(initialPage: _monthPageAnchor);
     _loadEvents();
-  }
-
-  @override
-  void dispose() {
-    _tabController.dispose();
-    _monthController.dispose();
-    super.dispose();
   }
 
   Future<void> _loadEvents() async {
@@ -208,25 +195,6 @@ class _CalendarScreenState extends State<CalendarScreen>
     if (success) {
       await _loadEvents();
     }
-  }
-
-  DateTime _monthForPage(int page) {
-    final offset = page - _monthPageAnchor;
-    return DateTime(_today.year, _today.month + offset);
-  }
-
-  List<DateTime?> _daysForMonth(DateTime month) {
-    final firstDay = DateTime(month.year, month.month, 1);
-    final daysInMonth = DateTime(month.year, month.month + 1, 0).day;
-    final leadingEmpty = firstDay.weekday % 7;
-    final totalSlots = ((leadingEmpty + daysInMonth) / 7).ceil() * 7;
-    return List<DateTime?>.generate(totalSlots, (index) {
-      final day = index - leadingEmpty + 1;
-      if (day < 1 || day > daysInMonth) {
-        return null;
-      }
-      return DateTime(month.year, month.month, day);
-    });
   }
 
   bool _isSameDay(DateTime a, DateTime b) {
@@ -251,211 +219,313 @@ class _CalendarScreenState extends State<CalendarScreen>
     return '$normalizedHour:$minute $suffix';
   }
 
-  Widget _buildMonthPage(DateTime month) {
-    final days = _daysForMonth(month);
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
-      children: [
-        Container(
-          padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
-          decoration: BoxDecoration(
-            color: const Color(0xFF09090B),
-            borderRadius: BorderRadius.circular(28),
-            border: Border.all(color: const Color(0xFF27272A)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+  Color _getEventColor(int index) {
+    final colors = [
+      const Color(0xFFEF4444),
+      const Color(0xFFF59E0B),
+      const Color(0xFF10B981),
+      const Color(0xFF3B82F6),
+      const Color(0xFF8B5CF6),
+      const Color(0xFFEC4899),
+      const Color(0xFF14B8A6),
+      const Color(0xFFF97316),
+    ];
+    return colors[index % colors.length];
+  }
+
+  Widget _buildCompactCalendar() {
+    final firstDay = DateTime(_currentMonth.year, _currentMonth.month, 1);
+    final daysInMonth = DateTime(
+      _currentMonth.year,
+      _currentMonth.month + 1,
+      0,
+    ).day;
+    final leadingEmpty = firstDay.weekday % 7;
+    final totalSlots = ((leadingEmpty + daysInMonth) / 7).ceil() * 7;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF09090B),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFF27272A)),
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
+              GestureDetector(
+                onTap: () => setState(() {
+                  _currentMonth = DateTime(
+                    _currentMonth.year,
+                    _currentMonth.month - 1,
+                  );
+                }),
+                child: const Icon(
+                  LucideIcons.chevronLeft,
+                  color: Colors.white,
+                  size: 20,
+                ),
+              ),
               Text(
-                '${_calendarMonths[month.month - 1]} ${month.year}',
+                '${_calendarMonths[_currentMonth.month - 1]} ${_currentMonth.year}',
                 style: const TextStyle(
                   color: Colors.white,
-                  fontSize: 28,
-                  fontWeight: FontWeight.w900,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
                 ),
               ),
-              const SizedBox(height: 6),
-              const Text(
-                'Scroll vertically to move through months. Tap a day to inspect events.',
-                style: TextStyle(color: Color(0xFFA1A1AA), fontSize: 13),
-              ),
-              const SizedBox(height: 18),
-              Row(
-                children: _calendarWeekdays
-                    .map(
-                      (weekday) => Expanded(
-                        child: Center(
-                          child: Text(
-                            weekday,
-                            style: const TextStyle(
-                              color: Color(0xFF71717A),
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                      ),
-                    )
-                    .toList(),
-              ),
-              const SizedBox(height: 12),
-              GridView.builder(
-                itemCount: days.length,
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 7,
-                  crossAxisSpacing: 8,
-                  mainAxisSpacing: 8,
-                  childAspectRatio: 0.78,
-                ),
-                itemBuilder: (context, index) {
-                  final day = days[index];
-                  if (day == null) {
-                    return const SizedBox.shrink();
-                  }
-                  final dayEvents = _eventsForDay(day);
-                  final isToday = _isSameDay(day, _today);
-                  final isSelected =
-                      _selectedDate != null && _isSameDay(day, _selectedDate!);
-                  return InkWell(
-                    borderRadius: BorderRadius.circular(18),
-                    onTap: () {
-                      setState(() {
-                        _selectedDate = day;
-                        _tabController.animateTo(1);
-                      });
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 8,
-                      ),
-                      decoration: BoxDecoration(
-                        color: isSelected
-                            ? const Color(0xFF1D4ED8).withValues(alpha: 0.25)
-                            : const Color(0xFF111113),
-                        borderRadius: BorderRadius.circular(18),
-                        border: Border.all(
-                          color: isToday
-                              ? const Color(0xFF38BDF8)
-                              : (dayEvents.isNotEmpty
-                                    ? const Color(0xFF3F3F46)
-                                    : const Color(0xFF18181B)),
-                        ),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            '${day.day}',
-                            style: TextStyle(
-                              color: isToday
-                                  ? const Color(0xFFBAE6FD)
-                                  : Colors.white,
-                              fontSize: 15,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                          const Spacer(),
-                          if (dayEvents.isNotEmpty)
-                            Wrap(
-                              spacing: 4,
-                              runSpacing: 4,
-                              children: dayEvents
-                                  .take(3)
-                                  .map(
-                                    (event) => Container(
-                                      width: 8,
-                                      height: 8,
-                                      decoration: BoxDecoration(
-                                        color: event.executed
-                                            ? const Color(0xFF10B981)
-                                            : const Color(0xFFF59E0B),
-                                        borderRadius: BorderRadius.circular(
-                                          999,
-                                        ),
-                                      ),
-                                    ),
-                                  )
-                                  .toList(),
-                            ),
-                        ],
-                      ),
-                    ),
+              GestureDetector(
+                onTap: () => setState(() {
+                  _currentMonth = DateTime(
+                    _currentMonth.year,
+                    _currentMonth.month + 1,
                   );
-                },
+                }),
+                child: const Icon(
+                  LucideIcons.chevronRight,
+                  color: Colors.white,
+                  size: 20,
+                ),
               ),
             ],
           ),
-        ),
-      ],
+          const SizedBox(height: 12),
+          Row(
+            children: _calendarWeekdays
+                .map(
+                  (day) => Expanded(
+                    child: Center(
+                      child: Text(
+                        day,
+                        style: const TextStyle(
+                          color: Color(0xFF71717A),
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                )
+                .toList(),
+          ),
+          const SizedBox(height: 8),
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 7,
+              crossAxisSpacing: 4,
+              mainAxisSpacing: 4,
+            ),
+            itemCount: totalSlots,
+            itemBuilder: (context, index) {
+              final dayNum = index - leadingEmpty + 1;
+              if (dayNum < 1 || dayNum > daysInMonth) {
+                return const SizedBox.shrink();
+              }
+              final day = DateTime(
+                _currentMonth.year,
+                _currentMonth.month,
+                dayNum,
+              );
+              final dayEvents = _eventsForDay(day);
+              final isToday = _isSameDay(day, _today);
+              final isSelected =
+                  _selectedDate != null && _isSameDay(day, _selectedDate!);
+              final hasEvents = dayEvents.isNotEmpty;
+
+              return GestureDetector(
+                onTap: () => setState(() => _selectedDate = day),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: isSelected
+                        ? const Color(0xFF3B82F6).withValues(alpha: 0.3)
+                        : isToday
+                        ? const Color(0xFF1F2937)
+                        : Colors.transparent,
+                    borderRadius: BorderRadius.circular(10),
+                    border: isToday
+                        ? Border.all(color: const Color(0xFF3B82F6), width: 1.5)
+                        : null,
+                  ),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        '$dayNum',
+                        style: TextStyle(
+                          color: isToday
+                              ? const Color(0xFF3B82F6)
+                              : Colors.white,
+                          fontSize: 13,
+                          fontWeight: isToday || isSelected
+                              ? FontWeight.w700
+                              : FontWeight.w500,
+                        ),
+                      ),
+                      if (hasEvents)
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: dayEvents
+                              .take(3)
+                              .toList()
+                              .asMap()
+                              .entries
+                              .map((entry) {
+                                return Container(
+                                  margin: const EdgeInsets.only(
+                                    top: 2,
+                                    right: 2,
+                                  ),
+                                  width: 5,
+                                  height: 5,
+                                  decoration: BoxDecoration(
+                                    color: _getEventColor(entry.key),
+                                    shape: BoxShape.circle,
+                                  ),
+                                );
+                              })
+                              .toList(),
+                        ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
     );
   }
 
-  Widget _buildEventTile(CalendarEventModel event) {
+  Widget _buildEventCard(CalendarEventModel event, int index) {
+    final eventColor = _getEventColor(index);
     return Container(
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: Color(0xFF18181B))),
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF18181B),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: eventColor.withValues(alpha: 0.3), width: 1),
       ),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(vertical: 10),
-        leading: CircleAvatar(
-          backgroundColor: event.executed
-              ? const Color(0xFF10B981).withValues(alpha: 0.2)
-              : const Color(0xFF1F2937),
-          child: Icon(
-            event.executed ? LucideIcons.check : LucideIcons.calendar,
-            color: event.executed
-                ? const Color(0xFF10B981)
-                : const Color(0xFF93C5FD),
+      child: Row(
+        children: [
+          Container(
+            width: 4,
+            height: 70,
+            decoration: BoxDecoration(
+              color: eventColor,
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(12),
+                bottomLeft: Radius.circular(12),
+              ),
+            ),
           ),
-        ),
-        title: Text(
-          event.prompt,
-          style: const TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.w700,
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: eventColor.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          _formatEventTime(event.time),
+                          style: TextStyle(
+                            color: eventColor,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      if (event.executed)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(
+                              0xFF10B981,
+                            ).withValues(alpha: 0.2),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                LucideIcons.check,
+                                size: 10,
+                                color: Color(0xFF10B981),
+                              ),
+                              SizedBox(width: 2),
+                              Text(
+                                'Done',
+                                style: TextStyle(
+                                  color: Color(0xFF10B981),
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      const Spacer(),
+                      GestureDetector(
+                        onTap: () => _deleteEvent(event.id),
+                        child: const Icon(
+                          LucideIcons.x,
+                          size: 16,
+                          color: Color(0xFF71717A),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    event.prompt,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      const Icon(
+                        LucideIcons.user,
+                        size: 10,
+                        color: Color(0xFF71717A),
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        event.agent,
+                        style: const TextStyle(
+                          color: Color(0xFF71717A),
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
           ),
-        ),
-        subtitle: Padding(
-          padding: const EdgeInsets.only(top: 4),
-          child: Text(
-            '${event.date} • ${_formatEventTime(event.time)} • ${event.agent}',
-            style: const TextStyle(color: Color(0xFFA1A1AA)),
-          ),
-        ),
-        trailing: IconButton(
-          icon: const Icon(LucideIcons.trash2, color: Colors.redAccent),
-          onPressed: () => _deleteEvent(event.id),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildEventsView() {
-    final visibleEvents = _selectedDate == null
-        ? _events
-        : _eventsForDay(_selectedDate!);
-
-    if (visibleEvents.isEmpty) {
-      return Center(
-        child: Text(
-          _selectedDate == null
-              ? 'No calendar events yet'
-              : 'No events for ${_selectedDate!.year}-${_selectedDate!.month.toString().padLeft(2, '0')}-${_selectedDate!.day.toString().padLeft(2, '0')}',
-          style: const TextStyle(color: Color(0xFF71717A)),
-        ),
-      );
-    }
-
-    return RefreshIndicator(
-      onRefresh: _loadEvents,
-      child: ListView.separated(
-        padding: EdgeInsets.zero,
-        itemCount: visibleEvents.length,
-        separatorBuilder: (_, __) => const SizedBox.shrink(),
-        itemBuilder: (context, index) => _buildEventTile(visibleEvents[index]),
+        ],
       ),
     );
   }
@@ -471,39 +541,133 @@ class _CalendarScreenState extends State<CalendarScreen>
         ),
         backgroundColor: Colors.transparent,
         elevation: 0,
-        bottom: TabBar(
-          controller: _tabController,
-          indicatorColor: const Color(0xFF38BDF8),
-          labelColor: Colors.white,
-          unselectedLabelColor: const Color(0xFF71717A),
-          tabs: const [
-            Tab(text: 'calendar view'),
-            Tab(text: 'events view'),
-          ],
-        ),
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : TabBarView(
-              controller: _tabController,
+          : Stack(
               children: [
-                RefreshIndicator(
-                  onRefresh: _loadEvents,
-                  child: PageView.builder(
-                    controller: _monthController,
-                    scrollDirection: Axis.vertical,
-                    itemBuilder: (context, index) {
-                      final month = _monthForPage(index);
-                      return _buildMonthPage(month);
-                    },
+                Positioned.fill(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                    child: _buildCompactCalendar(),
                   ),
                 ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: _buildEventsView(),
+                DraggableScrollableSheet(
+                  initialChildSize: 0.5,
+                  minChildSize: 0.3,
+                  maxChildSize: 0.9,
+                  builder: (context, scrollController) {
+                    return Container(
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF0F0F0F),
+                        borderRadius: BorderRadius.only(
+                          topLeft: Radius.circular(24),
+                          topRight: Radius.circular(24),
+                        ),
+                      ),
+                      child: Column(
+                        children: [
+                          GestureDetector(
+                            onTap: () {},
+                            child: Container(
+                              margin: const EdgeInsets.only(top: 12),
+                              width: 40,
+                              height: 4,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF3F3F46),
+                                borderRadius: BorderRadius.circular(2),
+                              ),
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+                            child: Row(
+                              children: [
+                                const Text(
+                                  'Events',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                                const Spacer(),
+                                if (_selectedDate != null)
+                                  GestureDetector(
+                                    onTap: () =>
+                                        setState(() => _selectedDate = null),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 4,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: const Color(
+                                          0xFF3B82F6,
+                                        ).withValues(alpha: 0.2),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Text(
+                                            '${_selectedDate!.day}/${_selectedDate!.month}',
+                                            style: const TextStyle(
+                                              color: Color(0xFF3B82F6),
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 4),
+                                          const Icon(
+                                            LucideIcons.x,
+                                            size: 12,
+                                            color: Color(0xFF3B82F6),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                          Expanded(
+                            child: _buildEventsListScrollable(scrollController),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
                 ),
               ],
             ),
+    );
+  }
+
+  Widget _buildEventsListScrollable(ScrollController controller) {
+    final visibleEvents = _selectedDate == null
+        ? _events
+        : _eventsForDay(_selectedDate!);
+
+    if (visibleEvents.isEmpty) {
+      return Center(
+        child: Text(
+          _selectedDate == null
+              ? 'No calendar events yet'
+              : 'No events on this day',
+          style: const TextStyle(color: Color(0xFF71717A)),
+        ),
+      );
+    }
+
+    return ListView.builder(
+      controller: controller,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      itemCount: visibleEvents.length,
+      itemBuilder: (context, index) {
+        final event = visibleEvents[index];
+        return _buildEventCard(event, index);
+      },
     );
   }
 }
@@ -577,6 +741,87 @@ class _ThinkingBubbleState extends State<_ThinkingBubble> {
         ],
       ),
     );
+  }
+}
+
+class _TypewriterText extends StatefulWidget {
+  final String fullText;
+  final TextStyle style;
+  final int charDelayMs;
+  final bool shouldAnimate;
+  final VoidCallback? onAnimationComplete;
+
+  const _TypewriterText({
+    required this.fullText,
+    required this.style,
+    this.charDelayMs = 10,
+    this.shouldAnimate = true,
+    this.onAnimationComplete,
+  });
+
+  @override
+  State<_TypewriterText> createState() => _TypewriterTextState();
+}
+
+class _TypewriterTextState extends State<_TypewriterText> {
+  String _displayedText = '';
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.shouldAnimate) {
+      _startTyping();
+    } else {
+      _displayedText = widget.fullText;
+    }
+  }
+
+  @override
+  void didUpdateWidget(_TypewriterText oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.fullText != widget.fullText) {
+      _timer?.cancel();
+      if (widget.shouldAnimate) {
+        _displayedText = '';
+        _startTyping();
+      } else {
+        _displayedText = widget.fullText;
+      }
+    }
+  }
+
+  void _startTyping() {
+    _timer = Timer.periodic(Duration(milliseconds: widget.charDelayMs), (
+      timer,
+    ) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      if (_displayedText.length >= widget.fullText.length) {
+        timer.cancel();
+        widget.onAnimationComplete?.call();
+      } else {
+        setState(() {
+          _displayedText = widget.fullText.substring(
+            0,
+            _displayedText.length + 1,
+          );
+        });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(_displayedText, style: widget.style);
   }
 }
 
@@ -1734,9 +1979,9 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _showCommands = false;
   bool _showSystemResponses = true;
 
-  // Typewriter effect state - tracks typing progress for messages
-  final Map<int, String> _typewriterTexts = {};
-  final Map<int, Timer?> _typewriterTimers = {};
+  // Track which message indices should animate (typewriter effect)
+  // Only new messages received via WebSocket should animate, not loaded from history
+  final Set<int> _animateMessages = {};
 
   // Offline message store — persisted locally and synced with server
   // Ref: docs/chat_persistence.md
@@ -2397,6 +2642,12 @@ class _ChatScreenState extends State<ChatScreen> {
                 ) ==
                 signature,
           )) {
+            final messageIndex = _messages.length;
+            final shouldAnimate = isAssistant && content.isNotEmpty;
+            if (shouldAnimate) {
+              _animateMessages.add(messageIndex);
+            }
+
             final newMessage = ChatMessage(
               role: role,
               content: content,
@@ -2407,11 +2658,6 @@ class _ChatScreenState extends State<ChatScreen> {
             _messages.add(newMessage);
             _persistMessages();
             _scrollToBottom();
-
-            // Start typewriter effect for assistant messages
-            if (isAssistant && content.isNotEmpty) {
-              _startTypewriter(_messages.length - 1, content);
-            }
           }
         });
 
@@ -2420,39 +2666,6 @@ class _ChatScreenState extends State<ChatScreen> {
         }
       }
     });
-  }
-
-  void _startTypewriter(int messageIndex, String fullText) {
-    // Cancel any existing timer for this message
-    _typewriterTimers[messageIndex]?.cancel();
-
-    // Start with empty text
-    _typewriterTexts[messageIndex] = '';
-
-    // Calculate character delay based on text length (faster for longer texts)
-    final charDelay = fullText.length > 100
-        ? 10
-        : (fullText.length > 50 ? 15 : 20);
-    int charIndex = 0;
-
-    _typewriterTimers[messageIndex] = Timer.periodic(
-      Duration(milliseconds: charDelay),
-      (timer) {
-        if (!mounted) {
-          timer.cancel();
-          return;
-        }
-        charIndex++;
-        if (charIndex >= fullText.length) {
-          timer.cancel();
-          _typewriterTexts[messageIndex] = fullText;
-          setState(() {});
-        } else {
-          _typewriterTexts[messageIndex] = fullText.substring(0, charIndex);
-          setState(() {});
-        }
-      },
-    );
   }
 
   Future<void> _loadBackgroundPreference() async {
@@ -2675,10 +2888,6 @@ class _ChatScreenState extends State<ChatScreen> {
     _wsSubscription?.cancel();
     _controller.dispose();
     _scrollController.dispose();
-    // Cancel all typewriter timers
-    for (final timer in _typewriterTimers.values) {
-      timer?.cancel();
-    }
     super.dispose();
   }
 
@@ -2944,7 +3153,13 @@ class _ChatScreenState extends State<ChatScreen> {
                     final isFirst =
                         index == 0 ||
                         _visibleMessages[index - 1].role != msg.role;
-                    return _buildMessageBubble(msg, isUser, isSystem, isFirst);
+                    return _buildMessageBubble(
+                      msg,
+                      isUser,
+                      isSystem,
+                      isFirst,
+                      index,
+                    );
                   },
                 ),
               ),
@@ -2960,8 +3175,9 @@ class _ChatScreenState extends State<ChatScreen> {
     ChatMessage msg,
     bool isUser,
     bool isSystem,
-    bool isFirst,
-  ) {
+    bool isFirst, [
+    int? messageIndex,
+  ]) {
     Color bgColor;
     Color textColor;
 
@@ -3037,11 +3253,31 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
               ),
             if (msg.content.isNotEmpty)
-              Text(
-                // Use typewriter text for assistant messages, full text otherwise
-                _typewriterTexts[_visibleMessages.indexOf(msg)] ?? msg.content,
-                style: TextStyle(color: textColor, fontSize: 15, height: 1.3),
-              ),
+              (!isUser && !isSystem)
+                  ? _TypewriterText(
+                      fullText: msg.content,
+                      style: TextStyle(
+                        color: textColor,
+                        fontSize: 15,
+                        height: 1.3,
+                      ),
+                      shouldAnimate:
+                          messageIndex != null &&
+                          _animateMessages.contains(messageIndex),
+                      onAnimationComplete: messageIndex != null
+                          ? () {
+                              _animateMessages.remove(messageIndex);
+                            }
+                          : null,
+                    )
+                  : Text(
+                      msg.content,
+                      style: TextStyle(
+                        color: textColor,
+                        fontSize: 15,
+                        height: 1.3,
+                      ),
+                    ),
             const SizedBox(height: 4),
             Row(
               mainAxisSize: MainAxisSize.min,
@@ -3299,32 +3535,68 @@ class _ChatScreenState extends State<ChatScreen> {
                   }),
                 ),
                 const SizedBox(width: 12),
-                GestureDetector(
-                  onTap: () => setState(
-                    () => _showSystemResponses = !_showSystemResponses,
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        _showSystemResponses
-                            ? LucideIcons.eye
-                            : LucideIcons.eyeOff,
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'System',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF52525B),
+                        letterSpacing: 1,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    GestureDetector(
+                      onTap: () {
+                        showDialog(
+                          context: context,
+                          builder: (context) => AlertDialog(
+                            backgroundColor: const Color(0xFF18181B),
+                            title: const Text(
+                              'System Messages',
+                              style: TextStyle(color: Colors.white),
+                            ),
+                            content: const Text(
+                              'Toggle to show/hide system messages in the chat. System messages include internal events, calendar actions, and execution feedback.',
+                              style: TextStyle(color: Color(0xFFA1A1AA)),
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(context),
+                                child: const Text(
+                                  'Got it',
+                                  style: TextStyle(color: Colors.white),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                      child: const Icon(
+                        LucideIcons.helpCircle,
                         size: 14,
-                        color: const Color(0xFF52525B),
+                        color: Color(0xFF52525B),
                       ),
-                      const SizedBox(width: 4),
-                      const Text(
-                        'sys',
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFF52525B),
-                          letterSpacing: 1,
-                        ),
-                      ),
-                    ],
-                  ),
+                    ),
+                    const SizedBox(width: 8),
+                    Switch(
+                      value: _showSystemResponses,
+                      onChanged: (val) =>
+                          setState(() => _showSystemResponses = val),
+                      activeTrackColor: const Color(
+                        0xFF10B981,
+                      ).withValues(alpha: 0.5),
+                      inactiveTrackColor: const Color(0xFF1A1A1A),
+                      thumbColor: WidgetStateProperty.resolveWith((states) {
+                        if (states.contains(WidgetState.selected)) {
+                          return const Color(0xFF10B981);
+                        }
+                        return const Color(0xFF52525B);
+                      }),
+                    ),
+                  ],
                 ),
                 const Spacer(),
                 if (_takeoverMode)
