@@ -533,9 +533,13 @@ class ApiService {
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body) as Map<String, dynamic>;
+      } else {
+        debugPrint(
+          'getAgentContextWindow failed: ${response.statusCode} - ${response.body}',
+        );
       }
     } catch (e) {
-      // log error
+      debugPrint('getAgentContextWindow error: $e');
     }
     return null;
   }
