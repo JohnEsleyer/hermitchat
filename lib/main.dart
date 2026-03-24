@@ -5252,10 +5252,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isLoading = true;
   bool _isSaving = false;
   bool _isSavingKeys = false;
-  String _timeOffset = '0';
-  String _pendingOffset = '0';
   DateTime? _serverTime;
-  DateTime? _serverUtcTime;
   Timer? _timeTimer;
 
   final TextEditingController _openrouterController = TextEditingController();
@@ -5283,42 +5280,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (data != null && mounted) {
       setState(() {
         try {
-          final rawUtcStr =
+          final rawStr =
               (data['serverUtcTime'] ?? data['datetime'] ?? data['time'])
                   .toString();
-          _serverUtcTime = DateTime.parse(rawUtcStr);
-          _timeOffset = data['offset']?.toString() ?? '0';
-          _pendingOffset = _timeOffset;
-          _updateDisplayedTimes();
+          final serverTime = DateTime.parse(rawStr);
+          _serverTime = serverTime.toLocal();
           _startTimeTicker();
         } catch (e) {
           debugPrint('Error parsing server time: $e');
-          _serverUtcTime = DateTime.now().toUtc();
-          _updateDisplayedTimes();
+          _serverTime = DateTime.now();
+          _startTimeTicker();
         }
       });
     } else if (mounted) {
       setState(() {
-        _serverUtcTime ??= DateTime.now().toUtc();
-        _updateDisplayedTimes();
+        _serverTime ??= DateTime.now();
+        _startTimeTicker();
       });
     }
-  }
-
-  void _updateDisplayedTimes() {
-    if (_serverUtcTime == null) return;
-    final offset = int.tryParse(_timeOffset) ?? 0;
-    // System time is raw server UTC + the user's defined offset
-    _serverTime = _serverUtcTime!.toUtc().add(Duration(hours: offset));
   }
 
   void _startTimeTicker() {
     _timeTimer?.cancel();
     _timeTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (mounted && _serverUtcTime != null) {
+      if (mounted && _serverTime != null) {
         setState(() {
-          _serverUtcTime = _serverUtcTime!.add(const Duration(seconds: 1));
-          _updateDisplayedTimes();
+          _serverTime = _serverTime!.add(const Duration(seconds: 1));
         });
       }
     });
@@ -5334,7 +5321,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
               settings['tunnelEnabled'] == true ||
               settings['tunnelEnabled'] == 'true';
           _tunnelUrl = settings['tunnelURL'] ?? '';
-          _timeOffset = settings['timeOffset']?.toString() ?? '0';
           // Update text fields with actual key values from server
           final openrouterKey = settings['openrouterKey']?.toString() ?? '';
           final openaiKey = settings['openaiKey']?.toString() ?? '';
@@ -5361,15 +5347,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
     }
   }
-
-  final List<Map<String, String>> _timePresets = [
-    {'label': 'UTC', 'value': '0', 'desc': 'London'},
-    {'label': '+8h', 'value': '8', 'desc': 'Manila'},
-    {'label': '+9h', 'value': '9', 'desc': 'Tokyo'},
-    {'label': '+1h', 'value': '1', 'desc': 'Paris'},
-    {'label': '-5h', 'value': '-5', 'desc': 'New York'},
-    {'label': '-8h', 'value': '-8', 'desc': 'Los Angeles'},
-  ];
 
   @override
   Widget build(BuildContext context) {
@@ -5608,9 +5585,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Widget _buildTimeSettingsSection() {
     final now = _serverTime;
-    final preview = _serverUtcTime?.add(
-      Duration(hours: int.tryParse(_pendingOffset) ?? 0),
-    );
 
     String formatTime(DateTime? t) {
       if (t == null) return "--:--:--";
@@ -5629,209 +5603,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
             children: [
               Expanded(
                 child: _buildTimeCard(
-                  label: 'GLOBAL SYSTEM TIME',
+                  label: 'LOCAL TIME',
                   time: formatTime(now),
                   color: const Color(0xFF10B981),
                   isActive: true,
                 ),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _buildTimeCard(
-                  label: 'PREVIEW (+${_pendingOffset}h)',
-                  time: formatTime(preview),
-                  color: const Color(0xFF3B82F6),
-                  isActive: _pendingOffset != _timeOffset,
-                ),
-              ),
             ],
-          ),
-          const SizedBox(height: 16),
-          Padding(
-            padding: const EdgeInsets.only(left: 4),
-            child: Row(
-              children: [
-                const Icon(
-                  LucideIcons.globe,
-                  size: 12,
-                  color: Color(0xFF64748B),
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  'SERVER OFFSET: UTC${int.parse(_timeOffset) >= 0 ? '+' : ''}${_timeOffset}h',
-                  style: const TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w900,
-                    color: Color(0xFF10B981),
-                    letterSpacing: 1.2,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-          const Divider(color: Color(0xFF1E293B)),
-          const SizedBox(height: 12),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                'CUSTOM OFFSET',
-                style: TextStyle(
-                  fontSize: 11,
-                  color: Color(0xFF71717A),
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 0.5,
-                ),
-              ),
-              Text(
-                '${int.tryParse(_pendingOffset) ?? 0}h',
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
-          SliderTheme(
-            data: SliderTheme.of(context).copyWith(
-              activeTrackColor: const Color(0xFF3B82F6),
-              inactiveTrackColor: const Color(0xFF1E293B),
-              thumbColor: Colors.white,
-              overlayColor: const Color(0xFF3B82F6).withValues(alpha: 0.2),
-              trackHeight: 4.0,
-            ),
-            child: Slider(
-              value: (int.tryParse(_pendingOffset) ?? 0).toDouble(),
-              min: -12,
-              max: 14,
-              divisions: 26,
-              onChanged: (value) {
-                setState(() {
-                  _pendingOffset = value.toInt().toString();
-                });
-              },
-            ),
           ),
           const SizedBox(height: 12),
           const Text(
-            'PRESETS',
-            style: TextStyle(
-              fontSize: 11,
-              color: Color(0xFF71717A),
-              fontWeight: FontWeight.w900,
-              letterSpacing: 1,
-            ),
+            'Time is displayed in your device\'s local timezone. Calendar events and schedules are interpreted as local time.',
+            style: TextStyle(fontSize: 11, color: Color(0xFF71717A)),
           ),
-          const SizedBox(height: 12),
-          GridView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 3,
-              childAspectRatio: 1.8,
-              crossAxisSpacing: 8,
-              mainAxisSpacing: 8,
-            ),
-            itemCount: _timePresets.length,
-            itemBuilder: (context, index) {
-              final preset = _timePresets[index];
-              final isSelected = _pendingOffset == preset['value'];
-              final isCurrent = _timeOffset == preset['value'];
-
-              return GestureDetector(
-                onTap: () {
-                  setState(() => _pendingOffset = preset['value']!);
-                },
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
-                  decoration: BoxDecoration(
-                    color: isSelected
-                        ? const Color(0xFF3B82F6)
-                        : const Color(0xFF09090B),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: isSelected
-                          ? const Color(0xFF3B82F6)
-                          : (isCurrent
-                                ? const Color(0xFF10B981)
-                                : const Color(0xFF27272A)),
-                      width: isSelected || isCurrent ? 2 : 1,
-                    ),
-                  ),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        preset['label']!,
-                        style: TextStyle(
-                          fontWeight: FontWeight.w900,
-                          fontSize: 14,
-                          color: isSelected ? Colors.white : Colors.white70,
-                        ),
-                      ),
-                      Text(
-                        preset['desc']!,
-                        style: TextStyle(
-                          fontSize: 9,
-                          color: isSelected ? Colors.white70 : Colors.grey,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            },
-          ),
-          const SizedBox(height: 20),
-          if (_pendingOffset != _timeOffset)
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: _isLoading || _isSaving
-                    ? null
-                    : () async {
-                        setState(() => _isSaving = true);
-                        final success = await ApiService().updateSettings({
-                          'timeOffset': _pendingOffset,
-                        });
-                        if (success) {
-                          await _syncTime();
-                          if (mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('System time synchronized'),
-                              ),
-                            );
-                          }
-                        }
-                        if (mounted) setState(() => _isSaving = false);
-                      },
-                icon: _isSaving
-                    ? const SizedBox(
-                        width: 14,
-                        height: 14,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : const Icon(LucideIcons.save, size: 16),
-                label: const Text(
-                  'Save Sync',
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF3B82F6),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                ),
-              ),
-            ),
         ],
       ),
     );
