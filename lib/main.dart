@@ -2678,9 +2678,38 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() => _showSystemResponses = value);
   }
 
-  /// Loads persisted messages from SharedPreferences (offline copy).
-  /// This ensures the conversation survives app restarts and network outages.
+  /// Loads conversation history from server, falling back to local storage.
+  /// Server history takes priority for consistency across devices.
   Future<void> _loadMessages() async {
+    // First try to fetch from server
+    try {
+      final history = await ApiService().getAgentHistory(
+        widget.agent.id.toString(),
+        limit: 100,
+      );
+      if (history.isNotEmpty && mounted) {
+        final serverMessages = history.map((h) {
+          return ChatMessage(
+            role: h['role'] as String? ?? 'user',
+            content: h['content'] as String? ?? '',
+            timestamp:
+                DateTime.tryParse(h['created_at'] as String? ?? '') ??
+                DateTime.now(),
+          );
+        }).toList();
+
+        setState(() => _messages.addAll(serverMessages));
+        _scrollToBottom();
+
+        // Persist server messages locally for offline access
+        await _persistMessagesFromList(serverMessages);
+        return;
+      }
+    } catch (_) {
+      // Fall back to local storage if server fails
+    }
+
+    // Fallback: Load from local SharedPreferences
     try {
       final prefs = await SharedPreferences.getInstance();
       final key = 'chat_messages_${widget.agent.id}';
@@ -2696,6 +2725,20 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     } catch (_) {
       // If loading fails, start with clean slate.
+    }
+  }
+
+  Future<void> _persistMessagesFromList(List<ChatMessage> messages) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = 'chat_messages_${widget.agent.id}';
+      final toStore = messages.length > 200
+          ? messages.sublist(messages.length - 200)
+          : messages;
+      final raw = toStore.map(_encodeStoredMessage).toList();
+      await prefs.setStringList(key, raw);
+    } catch (_) {
+      // Silently ignore persistence errors.
     }
   }
 

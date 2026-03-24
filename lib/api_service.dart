@@ -580,6 +580,29 @@ class ApiService {
     return null;
   }
 
+  Future<List<Map<String, dynamic>>> getAgentHistory(
+    String agentId, {
+    int limit = 100,
+  }) async {
+    if (baseUrl == null) return [];
+    try {
+      final response = await http
+          .get(
+            Uri.parse('$baseUrl/api/agents/$agentId/history?limit=$limit'),
+            headers: _headers,
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as List<dynamic>;
+        return data.map((e) => e as Map<String, dynamic>).toList();
+      }
+    } catch (e) {
+      // log error
+    }
+    return [];
+  }
+
   Future<bool> markMessagesSeen(String agentId) async {
     if (baseUrl == null) return false;
     try {
