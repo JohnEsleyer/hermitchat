@@ -188,15 +188,19 @@ class ApiService {
 
   Future<Map<String, dynamic>?> sendMessage(
     String agentId,
-    String message,
-  ) async {
+    String message, {
+    bool takeover = false,
+  }) async {
     if (baseUrl == null) return null;
     try {
       final response = await http
           .post(
             Uri.parse('$baseUrl/api/agents/$agentId/chat'),
             headers: _headers,
-            body: jsonEncode({'message': _encrypt(message)}),
+            body: jsonEncode({
+              'message': _encrypt(message),
+              'takeover': takeover,
+            }),
           )
           .timeout(const Duration(seconds: 60));
 

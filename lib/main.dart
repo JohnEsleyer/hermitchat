@@ -532,6 +532,13 @@ class _CalendarScreenState extends State<CalendarScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Scaffold(
+        backgroundColor: Colors.transparent,
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
     return Scaffold(
       backgroundColor: Colors.transparent,
       appBar: AppBar(
@@ -542,126 +549,106 @@ class _CalendarScreenState extends State<CalendarScreen> {
         backgroundColor: Colors.transparent,
         elevation: 0,
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : Stack(
-              children: [
-                Positioned.fill(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                    child: _buildCompactCalendar(),
-                  ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildCompactCalendar(),
+            const SizedBox(height: 16),
+            Container(
+              decoration: const BoxDecoration(
+                color: Color(0xFF0F0F0F),
+                borderRadius: BorderRadius.only(
+                  topLeft: Radius.circular(24),
+                  topRight: Radius.circular(24),
                 ),
-                DraggableScrollableSheet(
-                  initialChildSize: 0.5,
-                  minChildSize: 0.3,
-                  maxChildSize: 0.9,
-                  builder: (context, scrollController) {
-                    return Container(
-                      decoration: const BoxDecoration(
-                        color: Color(0xFF0F0F0F),
-                        borderRadius: BorderRadius.only(
-                          topLeft: Radius.circular(24),
-                          topRight: Radius.circular(24),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const SizedBox(height: 16),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                    child: Row(
+                      children: [
+                        const Text(
+                          'Events',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                          ),
                         ),
-                      ),
-                      child: Column(
-                        children: [
+                        const Spacer(),
+                        if (_selectedDate != null)
                           GestureDetector(
-                            onTap: () {},
+                            onTap: () => setState(() => _selectedDate = null),
                             child: Container(
-                              margin: const EdgeInsets.only(top: 12),
-                              width: 40,
-                              height: 4,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
                               decoration: BoxDecoration(
-                                color: const Color(0xFF3F3F46),
-                                borderRadius: BorderRadius.circular(2),
+                                color: const Color(
+                                  0xFF3B82F6,
+                                ).withValues(alpha: 0.2),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    '${_selectedDate!.day}/${_selectedDate!.month}',
+                                    style: const TextStyle(
+                                      color: Color(0xFF3B82F6),
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  const Icon(
+                                    LucideIcons.x,
+                                    size: 12,
+                                    color: Color(0xFF3B82F6),
+                                  ),
+                                ],
                               ),
                             ),
                           ),
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-                            child: Row(
-                              children: [
-                                const Text(
-                                  'Events',
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                                const Spacer(),
-                                if (_selectedDate != null)
-                                  GestureDetector(
-                                    onTap: () =>
-                                        setState(() => _selectedDate = null),
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 8,
-                                        vertical: 4,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: const Color(
-                                          0xFF3B82F6,
-                                        ).withValues(alpha: 0.2),
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Text(
-                                            '${_selectedDate!.day}/${_selectedDate!.month}',
-                                            style: const TextStyle(
-                                              color: Color(0xFF3B82F6),
-                                              fontSize: 12,
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                          ),
-                                          const SizedBox(width: 4),
-                                          const Icon(
-                                            LucideIcons.x,
-                                            size: 12,
-                                            color: Color(0xFF3B82F6),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                              ],
-                            ),
-                          ),
-                          Expanded(
-                            child: _buildEventsListScrollable(scrollController),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-              ],
+                      ],
+                    ),
+                  ),
+                  _buildEventsList(),
+                ],
+              ),
             ),
+          ],
+        ),
+      ),
     );
   }
 
-  Widget _buildEventsListScrollable(ScrollController controller) {
+  Widget _buildEventsList() {
     final visibleEvents = _selectedDate == null
         ? _events
         : _eventsForDay(_selectedDate!);
 
     if (visibleEvents.isEmpty) {
-      return Center(
-        child: Text(
-          _selectedDate == null
-              ? 'No calendar events yet'
-              : 'No events on this day',
-          style: const TextStyle(color: Color(0xFF71717A)),
+      return const Padding(
+        padding: EdgeInsets.all(32),
+        child: Center(
+          child: Text(
+            'No calendar events yet',
+            style: TextStyle(color: Color(0xFF71717A)),
+          ),
         ),
       );
     }
 
     return ListView.builder(
-      controller: controller,
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
       padding: const EdgeInsets.symmetric(horizontal: 16),
       itemCount: visibleEvents.length,
       itemBuilder: (context, index) {
@@ -2809,6 +2796,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final response = await ApiService().sendMessage(
       widget.agent.id.toString(),
       text,
+      takeover: _takeoverMode,
     );
     if (!mounted) return;
 
