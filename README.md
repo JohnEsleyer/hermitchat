@@ -1,5 +1,7 @@
 # HermitChat
 
+*Last updated: March 2026*
+
 The companion mobile application for HermitShell, built with Flutter.
 
 HermitChat allows you to manage your AI agents, converse with them, view system metrics, and interact with the generative Apps they create—all from your mobile device.
