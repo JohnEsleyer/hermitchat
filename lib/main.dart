@@ -812,6 +812,123 @@ class _TypewriterTextState extends State<_TypewriterText> {
   }
 }
 
+class _AnimatedReminderIcon extends StatefulWidget {
+  final Color color;
+
+  const _AnimatedReminderIcon({required this.color});
+
+  @override
+  State<_AnimatedReminderIcon> createState() => _AnimatedReminderIconState();
+}
+
+class _AnimatedReminderIconState extends State<_AnimatedReminderIcon>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _scaleAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      duration: const Duration(milliseconds: 800),
+      vsync: this,
+    );
+    _scaleAnimation = Tween<double>(
+      begin: 1.0,
+      end: 1.2,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
+    _controller.repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ScaleTransition(
+      scale: _scaleAnimation,
+      child: Icon(LucideIcons.bell, size: 12, color: widget.color),
+    );
+  }
+}
+
+class _BlinkingCursor extends StatefulWidget {
+  final Color color;
+  const _BlinkingCursor({required this.color});
+
+  @override
+  State<_BlinkingCursor> createState() => _BlinkingCursorState();
+}
+
+class _BlinkingCursorState extends State<_BlinkingCursor>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _opacity;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      duration: const Duration(milliseconds: 530),
+      vsync: this,
+    )..repeat();
+    _opacity = Tween<double>(begin: 1.0, end: 0.0).animate(_controller);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: _opacity,
+      child: Text(
+        '█',
+        style: TextStyle(
+          color: widget.color,
+          fontSize: 12,
+          fontFamily: 'monospace',
+        ),
+      ),
+    );
+  }
+}
+
+class _TerminalPrompt extends StatelessWidget {
+  final String label;
+  final Color color;
+  const _TerminalPrompt({required this.label, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          '➜',
+          style: TextStyle(color: color, fontSize: 12, fontFamily: 'monospace'),
+        ),
+        const SizedBox(width: 4),
+        Text(
+          label,
+          style: TextStyle(
+            color: color,
+            fontSize: 11,
+            fontFamily: 'monospace',
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _VideoPlayerWidget extends StatefulWidget {
   final String url;
   final String token;
@@ -1964,11 +2081,17 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _takeoverMode = false;
   bool _isSending = false;
   bool _showCommands = false;
-  bool _showSystemResponses = true;
+  bool _showSystemResponses = false;
+  final Map<int, bool> _systemMessageExpanded = {};
 
   // Track which message indices should animate (typewriter effect)
   // Only new messages received via WebSocket should animate, not loaded from history
   final Set<int> _animateMessages = {};
+
+  // Queue for reminder messages that wait for agent typewriter to finish
+  final List<ChatMessage> _pendingReminders = [];
+
+  bool get _hasActiveTypewriter => _animateMessages.isNotEmpty;
 
   // Offline message store — persisted locally and synced with server
   // Ref: docs/chat_persistence.md
@@ -2013,6 +2136,98 @@ class _ChatScreenState extends State<ChatScreen> {
 
   bool _containsTags(String text) {
     return _tagPattern.hasMatch(text);
+  }
+
+  String _formatSystemResponse(String content) {
+    try {
+      if (content.trim().startsWith('{') || content.trim().startsWith('[')) {
+        final decoded = content.contains('"')
+            ? (content.startsWith('{') ? _parseSimpleJson(content) : content)
+            : content;
+
+        if (decoded is Map<String, dynamic>) {
+          return _formatJsonAsTerminalOutput(decoded);
+        }
+      }
+
+      if (content.contains('"') && content.contains(':')) {
+        final tryParse = _parseSimpleJson(content);
+        if (tryParse != null) {
+          return _formatJsonAsTerminalOutput(tryParse);
+        }
+      }
+    } catch (_) {}
+    return content;
+  }
+
+  Map<String, dynamic>? _parseSimpleJson(String jsonStr) {
+    try {
+      final result = <String, dynamic>{};
+      final pairs = jsonStr.split(',');
+      for (final pair in pairs) {
+        final idx = pair.indexOf(':');
+        if (idx > 0) {
+          final key = pair
+              .substring(0, idx)
+              .trim()
+              .replaceAll('"', '')
+              .replaceAll('{', '')
+              .replaceAll('}', '');
+          var val = pair.substring(idx + 1).trim().replaceAll('"', '');
+          if (val == 'true')
+            val = '✓';
+          else if (val == 'false')
+            val = '✗';
+          result[key] = val;
+        }
+      }
+      return result.isNotEmpty ? result : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String _formatJsonAsTerminalOutput(Map<String, dynamic> data) {
+    final buffer = StringBuffer();
+    buffer.writeln('┌─────────────────────────────────────┐');
+    buffer.writeln('│  📋 Response                        │');
+    buffer.writeln('├─────────────────────────────────────┤');
+
+    for (final entry in data.entries) {
+      final key = entry.key.toString().replaceAll('_', ' ').toUpperCase();
+      final value = entry.value.toString();
+      final displayVal = value.length > 25
+          ? '${value.substring(0, 22)}...'
+          : value;
+      buffer.writeln('│ ${key.padRight(15)} │ $displayVal'.padRight(38) + '│');
+    }
+
+    buffer.writeln('└─────────────────────────────────────┘');
+    return buffer.toString();
+  }
+
+  String _formatErrorMessage(String error) {
+    final buffer = StringBuffer();
+    buffer.writeln('┌─────────────────────────────────────┐');
+    buffer.writeln('│  ⚠️  Error                           │');
+    buffer.writeln('├─────────────────────────────────────┤');
+
+    final lines = error.split(' ');
+    String line = '';
+    for (final word in lines) {
+      if (line.length + word.length + 1 > 28) {
+        buffer.writeln('│ $line'.padRight(38) + '│');
+        line = word;
+      } else {
+        line += line.isEmpty ? word : ' $word';
+      }
+    }
+    if (line.isNotEmpty) {
+      buffer.writeln('│ $line'.padRight(38) + '│');
+    }
+
+    buffer.writeln('└─────────────────────────────────────┘');
+    return buffer.toString();
   }
 
   /// Rejects tags and displays system message when user tries to use tags in non-takeover mode.
@@ -2618,6 +2833,21 @@ class _ChatScreenState extends State<ChatScreen> {
         final signature = _messageSignature(role, content, files);
 
         final isAssistant = role == 'assistant';
+        final isReminder = role == 'reminder';
+        final isSystem = role == 'system';
+
+        // If reminder and typewriter is active, queue it for later
+        if (isReminder && _hasActiveTypewriter) {
+          final queuedMessage = ChatMessage(
+            role: role,
+            content: content,
+            timestamp: DateTime.now(),
+            isRead: true,
+            files: files.isEmpty ? null : files,
+          );
+          _pendingReminders.add(queuedMessage);
+          return;
+        }
 
         setState(() {
           if (!_messages.any(
@@ -2648,7 +2878,7 @@ class _ChatScreenState extends State<ChatScreen> {
           }
         });
 
-        if (isAssistant && content.isNotEmpty) {
+        if ((isAssistant || isReminder || isSystem) && content.isNotEmpty) {
           _showNotification(content);
         }
       }
@@ -2756,6 +2986,26 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  void _processPendingReminders() {
+    if (_pendingReminders.isEmpty) return;
+    if (_hasActiveTypewriter) return; // Wait for more animations
+
+    String? lastReminderContent;
+    setState(() {
+      for (final reminder in _pendingReminders) {
+        _messages.add(reminder);
+        lastReminderContent = reminder.content;
+      }
+      _pendingReminders.clear();
+      _persistMessages();
+    });
+    _scrollToBottom();
+
+    if (lastReminderContent != null && lastReminderContent!.isNotEmpty) {
+      _showNotification(lastReminderContent!);
+    }
+  }
+
   Future<void> _showNotification(String body) async {
     NotificationService().playNotificationSound();
     if (kIsWeb) return;
@@ -2852,7 +3102,7 @@ class _ChatScreenState extends State<ChatScreen> {
           _messages.add(
             ChatMessage(
               role: 'system',
-              content: 'Error: $errorMsg',
+              content: _formatErrorMessage(errorMsg),
               timestamp: DateTime.now(),
               isRead: true,
             ),
@@ -2872,10 +3122,11 @@ class _ChatScreenState extends State<ChatScreen> {
               '';
 
           if (message.isNotEmpty) {
+            final formattedMessage = _formatSystemResponse(message);
             _messages.add(
               ChatMessage(
                 role: role ?? 'system',
-                content: message,
+                content: formattedMessage,
                 timestamp: DateTime.now(),
                 isRead: true,
               ),
@@ -3181,6 +3432,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     final msg = _visibleMessages[index];
                     final isUser = msg.role == 'user';
                     final isSystem = msg.role == 'system';
+                    final isReminder = msg.role == 'reminder';
                     final isFirst =
                         index == 0 ||
                         _visibleMessages[index - 1].role != msg.role;
@@ -3188,6 +3440,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       msg,
                       isUser,
                       isSystem,
+                      isReminder,
                       isFirst,
                       index,
                     );
@@ -3202,27 +3455,83 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  static const int _systemMessageCharLimit = 100;
+
+  Widget _buildSystemMessageContent(ChatMessage msg, int? messageIndex) {
+    final isSystem = msg.role == 'system';
+    if (!isSystem) {
+      return SelectableText(
+        msg.content,
+        style: const TextStyle(color: Colors.black, fontSize: 15, height: 1.4),
+      );
+    }
+
+    final isExpanded = messageIndex != null
+        ? _systemMessageExpanded[messageIndex] ?? false
+        : false;
+    final needsTruncation = msg.content.length > _systemMessageCharLimit;
+    final displayText = needsTruncation && !isExpanded
+        ? '${msg.content.substring(0, _systemMessageCharLimit)}...'
+        : msg.content;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SelectableText(
+          displayText,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 15,
+            height: 1.4,
+          ),
+        ),
+        if (needsTruncation) ...[
+          const SizedBox(height: 8),
+          GestureDetector(
+            onTap: () {
+              if (messageIndex != null) {
+                setState(() {
+                  _systemMessageExpanded[messageIndex] = !isExpanded;
+                });
+              }
+            },
+            child: Text(
+              isExpanded ? 'Show less' : 'Show more',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.7),
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
   Widget _buildMessageBubble(
     ChatMessage msg,
     bool isUser,
     bool isSystem,
+    bool isReminder,
     bool isFirst, [
     int? messageIndex,
   ]) {
     Color bgColor;
     Color textColor;
+    final bubbleRadius = BorderRadius.circular(20);
 
     if (isUser) {
-      // User bubble: Green
       bgColor = const Color(0xFF10B981);
       textColor = Colors.white;
+    } else if (isReminder) {
+      bgColor = const Color(0xFFFFCC80);
+      textColor = Colors.black;
     } else if (isSystem) {
-      // System bubble: Gray/Blackish
-      bgColor = const Color(0xFF1A1A1A);
-      textColor = const Color(0xFF9CA3AF);
+      bgColor = Colors.black;
+      textColor = Colors.white;
     } else {
-      // AI Agent bubble: White with black text
-      bgColor = const Color(0xFFF4F4F5);
+      bgColor = Colors.white;
       textColor = Colors.black;
     }
 
@@ -3242,55 +3551,75 @@ class _ChatScreenState extends State<ChatScreen> {
         );
       },
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
           color: bgColor,
-          borderRadius: BorderRadius.only(
-            topLeft: const Radius.circular(18),
-            topRight: const Radius.circular(18),
-            bottomLeft: isUser
-                ? const Radius.circular(18)
-                : const Radius.circular(4),
-            bottomRight: isUser
-                ? const Radius.circular(4)
-                : const Radius.circular(18),
-          ),
+          borderRadius: isUser || isReminder
+              ? bubbleRadius
+              : (isSystem ? bubbleRadius : bubbleRadius),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (isSystem)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 4),
+            if (isReminder)
+              Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(12),
+                ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(
-                      LucideIcons.bot,
-                      size: 12,
-                      color: textColor.withValues(alpha: 0.7),
-                    ),
+                    Icon(LucideIcons.bell, size: 12, color: textColor),
                     const SizedBox(width: 4),
                     Text(
-                      'system',
+                      'Reminder',
                       style: TextStyle(
-                        color: textColor.withValues(alpha: 0.7),
-                        fontSize: 10,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.8,
+                        color: textColor,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
                   ],
                 ),
               ),
+            if (isSystem)
+              Container(
+                margin: const EdgeInsets.only(bottom: 6),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.3),
+                    width: 1,
+                  ),
+                ),
+                child: Text(
+                  'System',
+                  style: TextStyle(
+                    color: textColor,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
             if (msg.content.isNotEmpty)
-              (!isUser && !isSystem)
+              (!isUser && !isSystem && !isReminder)
                   ? _TypewriterText(
                       fullText: msg.content,
                       style: TextStyle(
                         color: textColor,
                         fontSize: 15,
-                        height: 1.3,
+                        height: 1.4,
                       ),
                       shouldAnimate:
                           messageIndex != null &&
@@ -3298,18 +3627,13 @@ class _ChatScreenState extends State<ChatScreen> {
                       onAnimationComplete: messageIndex != null
                           ? () {
                               _animateMessages.remove(messageIndex);
+                              // Process pending reminders after typewriter finishes
+                              _processPendingReminders();
                             }
                           : null,
                     )
-                  : Text(
-                      msg.content,
-                      style: TextStyle(
-                        color: textColor,
-                        fontSize: 15,
-                        height: 1.3,
-                      ),
-                    ),
-            const SizedBox(height: 4),
+                  : _buildSystemMessageContent(msg, messageIndex),
+            const SizedBox(height: 6),
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -3317,7 +3641,11 @@ class _ChatScreenState extends State<ChatScreen> {
                   _formatTime(msg.timestamp),
                   style: TextStyle(
                     fontSize: 11,
-                    color: textColor.withValues(alpha: 0.5),
+                    color: isUser
+                        ? Colors.white.withValues(alpha: 0.7)
+                        : (isSystem
+                              ? Colors.white.withValues(alpha: 0.5)
+                              : Colors.black.withValues(alpha: 0.5)),
                   ),
                 ),
                 if (isUser) ...[
@@ -3395,15 +3723,11 @@ class _ChatScreenState extends State<ChatScreen> {
                 height: 28,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: const Color(0xFF27272A),
+                  color: Colors.white,
                 ),
                 child: const ClipOval(
                   child: Center(
-                    child: Icon(
-                      LucideIcons.bot,
-                      size: 16,
-                      color: Color(0xFF10B981),
-                    ),
+                    child: Icon(LucideIcons.bot, size: 16, color: Colors.black),
                   ),
                 ),
               )
@@ -3703,19 +4027,35 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                GestureDetector(
-                  onTap: _sendMessage,
-                  child: Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(22),
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF10B981), Color(0xFF059669)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
                     ),
-                    child: const Icon(
-                      LucideIcons.send,
-                      color: Colors.black,
-                      size: 18,
+                    borderRadius: BorderRadius.circular(24),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF10B981).withValues(alpha: 0.3),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(24),
+                      onTap: _sendMessage,
+                      child: const Icon(
+                        LucideIcons.send,
+                        color: Colors.white,
+                        size: 20,
+                      ),
                     ),
                   ),
                 ),
@@ -5926,14 +6266,33 @@ class AppViewerScreen extends StatefulWidget {
 
 class _AppViewerScreenState extends State<AppViewerScreen> {
   late final WebViewController _controller;
+  bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    _controller = WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(const Color(0x00000000))
-      ..loadRequest(Uri.parse(widget.url));
+    _initController();
+  }
+
+  Future<void> _initController() async {
+    _controller = WebViewController();
+    await _controller.setJavaScriptMode(JavaScriptMode.unrestricted);
+    await _controller.setBackgroundColor(const Color(0x00000000));
+    await _controller.setNavigationDelegate(
+      NavigationDelegate(
+        onPageStarted: (String url) {},
+        onPageFinished: (String url) {
+          if (mounted) {
+            setState(() => _isLoading = false);
+          }
+        },
+        onWebResourceError: (WebResourceError error) {},
+      ),
+    );
+    await _controller.loadRequest(Uri.parse(widget.url));
+    if (mounted) {
+      setState(() => _isLoading = false);
+    }
   }
 
   @override
@@ -5944,7 +6303,11 @@ class _AppViewerScreenState extends State<AppViewerScreen> {
         backgroundColor: Colors.black,
         iconTheme: const IconThemeData(color: Colors.white),
       ),
-      body: WebViewWidget(controller: _controller),
+      body: _isLoading
+          ? const Center(
+              child: CircularProgressIndicator(color: Color(0xFF10B981)),
+            )
+          : WebViewWidget(controller: _controller),
     );
   }
 }
