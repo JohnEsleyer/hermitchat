@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Background circle -->
+  <circle cx="256" cy="256" r="256" fill="#10B981"/>
+  
+  <!-- Hermit Mascot -->
+  <g transform="translate(106, 140)">
+    <!-- Legs -->
+    <g stroke="white" stroke-width="12" stroke-linecap="round">
+      <line x1="75" y1="135" x2="15" y2="120" />
+      <line x1="69" y1="165" x2="15" y2="165" />
+      <line x1="84" y1="195" x2="30" y2="225" />
+      
+      <line x1="225" y1="135" x2="285" y2="120" />
+      <line x1="231" y1="165" x2="285" y2="165" />
+      <line x1="216" y1="195" x2="270" y2="225" />
+    </g>
+    
+    <!-- Body -->
+    <circle cx="150" cy="150" r="90" fill="white"/>
+    
+    <!-- Eyes -->
+    <circle cx="120" cy="135" r="15" fill="#0a0a0a"/>
+    <circle cx="180" cy="135" r="15" fill="#0a0a0a"/>
+    
+    <!-- Eye shine -->
+    <circle cx="124" cy="131" r="4" fill="white"/>
+    <circle cx="184" cy="131" r="4" fill="white"/>
+  </g>
+</svg>
