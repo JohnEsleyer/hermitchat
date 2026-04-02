@@ -33,10 +33,10 @@ class ApiService {
   String _encrypt(String text) {
     try {
       final key = _deriveKey("hermit123");
-      final iv = enc.IV.fromSecureRandom(16);
-      final benc = enc.Encrypter(enc.AES(key, mode: enc.AESMode.cbc));
+      final iv = enc.IV.fromSecureRandom(12);
+      final benc = enc.Encrypter(enc.AES(key, mode: enc.AESMode.gcm));
       final encrypted = benc.encrypt(text, iv: iv);
-      return "cbc:${base64.encode(iv.bytes + encrypted.bytes)}";
+      return "enc:${base64.encode(iv.bytes + encrypted.bytes)}";
     } catch (e) {
       return text;
     }
