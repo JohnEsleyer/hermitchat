@@ -183,7 +183,7 @@ class _ThoughtsAndTerminalsAccordionState extends State<_ThoughtsAndTerminalsAcc
     return Container(
       margin: const EdgeInsets.only(top: 8),
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.3),
+        color: _expanded ? Colors.black.withValues(alpha: 0.6) : Colors.black.withValues(alpha: 0.3),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
       ),
@@ -2268,12 +2268,9 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
-  bool _takeoverMode = false;
   bool _isSending = false;
   bool _showCommands = false;
   bool _showXmlTags = false;
-  bool _showSystemResponses = true;
-  final Map<int, bool> _systemMessageExpanded = {};
 
   late AnimationController _clearAnimationController;
   late Animation<double> _clearFadeAnimation;
@@ -2348,7 +2345,6 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   }
 
   List<ChatMessage> get _visibleMessages {
-    if (_showSystemResponses) return _messages;
     return _messages.where((message) => message.role != 'system').toList();
   }
 
@@ -3046,7 +3042,6 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       ),
     );
     _loadBackgroundPreference();
-    _loadSystemVisibilityPreference();
     _loadMessages();
 
     // Mark messages as seen when conversation is opened
@@ -3153,20 +3148,6 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     );
     if (!mounted) return;
     setState(() => _backgroundId = backgroundId);
-  }
-
-  Future<void> _loadSystemVisibilityPreference() async {
-    final prefs = await SharedPreferences.getInstance();
-    final value = prefs.getBool('show_system_responses');
-    if (!mounted || value == null) return;
-    setState(() => _showSystemResponses = value);
-  }
-
-  Future<void> _setShowSystemResponses(bool value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('show_system_responses', value);
-    if (!mounted) return;
-    setState(() => _showSystemResponses = value);
   }
 
   /// Loads conversation history from server, falling back to local storage.
@@ -3602,9 +3583,6 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                 case 'clear':
                   _sendCommand('/clear');
                   break;
-                case 'show_system':
-                  _setShowSystemResponses(!_showSystemResponses);
-                  break;
                 case 'metrics':
                   _showMetrics();
                   break;
@@ -3899,7 +3877,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                 ),
               ),
             if (msg.content.isNotEmpty)
-              (!isUser && !isSystem && !isReminder)
+              (!isSystem && !isReminder)
                   ? Builder(
                       builder: (context) {
                         final parsed = _parseMessageContent(msg.content);
@@ -4191,70 +4169,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                     return const Color(0xFF52525B);
                   }),
                 ),
-                const SizedBox(width: 12),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      'System',
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF52525B),
-                        letterSpacing: 1,
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    GestureDetector(
-                      onTap: () {
-                        showDialog(
-                          context: context,
-                          builder: (context) => AlertDialog(
-                            backgroundColor: const Color(0xFF18181B),
-                            title: const Text(
-                              'System Messages',
-                              style: TextStyle(color: Colors.white),
-                            ),
-                            content: const Text(
-                              'Toggle to show/hide system messages in the chat. System messages include internal events, calendar actions, and execution feedback.',
-                              style: TextStyle(color: Color(0xFFA1A1AA)),
-                            ),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(context),
-                                child: const Text(
-                                  'Got it',
-                                  style: TextStyle(color: Colors.white),
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-                      },
-                      child: const Icon(
-                        LucideIcons.helpCircle,
-                        size: 14,
-                        color: Color(0xFF52525B),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Switch(
-                      value: _showSystemResponses,
-                      onChanged: (val) =>
-                          setState(() => _showSystemResponses = val),
-                      activeTrackColor: const Color(
-                        0xFF10B981,
-                      ).withValues(alpha: 0.5),
-                      inactiveTrackColor: const Color(0xFF1A1A1A),
-                      thumbColor: WidgetStateProperty.resolveWith((states) {
-                        if (states.contains(WidgetState.selected)) {
-                          return const Color(0xFF10B981);
-                        }
-                        return const Color(0xFF52525B);
-                      }),
-                    ),
-                  ],
-                ),
+
                 const Spacer(),
                 if (_takeoverMode)
                   Container(
