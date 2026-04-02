@@ -42,24 +42,57 @@ class ApiService {
     }
   }
 
-  String _decrypt(String ciphertext) {
+  String decrypt(String ciphertext) {
     try {
       final key = _deriveKey("hermit123");
 
       if (ciphertext.startsWith("cbc:")) {
+        // Legacy CBC format
         final data = base64.decode(ciphertext.substring(4));
         final iv = enc.IV(Uint8List.fromList(data.sublist(0, 16)));
         final encryptedBytes = Uint8List.fromList(data.sublist(16));
         final benc = enc.Encrypter(enc.AES(key, mode: enc.AESMode.cbc));
         return benc.decrypt(enc.Encrypted(encryptedBytes), iv: iv);
       } else if (ciphertext.startsWith("enc:")) {
-        // Old GCM format - just return as-is, server will handle
-        return ciphertext;
+        // GCM format from server - decrypt using AES-GCM
+        final encryptedData = ciphertext.substring(4);
+        return decryptGCM(encryptedData, key.bytes);
       }
     } catch (e) {
-      // Log error
+      debugPrint('Decrypt error: $e');
     }
     return ciphertext;
+  }
+
+  String decryptGCM(String base64Data, List<int> keyBytes) {
+    try {
+      final ciphertext = base64Decode(base64Data);
+
+      const nonceSize = 12;
+      const tagSize = 16;
+
+      if (ciphertext.length < nonceSize + tagSize) {
+        return base64Data;
+      }
+
+      final nonce = ciphertext.sublist(0, nonceSize);
+      final encryptedWithTag = ciphertext.sublist(nonceSize);
+
+      final key = enc.Key(Uint8List.fromList(keyBytes));
+      final iv = enc.IV(Uint8List.fromList(nonce));
+
+      final benc = enc.Encrypter(
+        enc.AES(key, mode: enc.AESMode.gcm, padding: 'PKCS7'),
+      );
+      final decrypted = benc.decrypt(
+        enc.Encrypted(Uint8List.fromList(encryptedWithTag)),
+        iv: iv,
+      );
+      return decrypted;
+    } catch (e) {
+      debugPrint('GCM decrypt error: $e');
+      return base64Data;
+    }
   }
 
   Future<void> init() async {
@@ -86,7 +119,7 @@ class ApiService {
           } else if (data['type'] == 'new_message') {
             // Decrypt content if it's encrypted
             if (data['content'] != null) {
-              data['content'] = _decrypt(data['content']);
+              data['content'] = decrypt(data['content']);
             }
             _messageController.add(data);
           } else {
@@ -207,10 +240,10 @@ class ApiService {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         if (data['response'] != null) {
-          data['response'] = _decrypt(data['response']);
+          data['response'] = decrypt(data['response']);
         }
         if (data['message'] != null) {
-          data['message'] = _decrypt(data['message']);
+          data['message'] = decrypt(data['message']);
         }
         return data;
       } else {
@@ -257,6 +290,23 @@ class ApiService {
       // log error
     }
     return [];
+  }
+
+  Future<bool> deleteApp(String agentId, String appName) async {
+    if (baseUrl == null) return false;
+    try {
+      final response = await http
+          .delete(
+            Uri.parse('$baseUrl/api/agents/$agentId/apps/$appName'),
+            headers: _headers,
+          )
+          .timeout(const Duration(seconds: 10));
+
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint('deleteApp error: $e');
+    }
+    return false;
   }
 
   Future<Map<String, dynamic>?> getSettings() async {

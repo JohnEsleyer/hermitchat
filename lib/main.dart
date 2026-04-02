@@ -9,6 +9,7 @@ import 'package:lucide_icons/lucide_icons.dart';
 import 'package:audioplayers/audioplayers.dart';
 
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:image_picker/image_picker.dart';
@@ -19,6 +20,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
     FlutterLocalNotificationsPlugin();
 
+enum MessageSoundType { sent, received, system, reminder }
+
 class NotificationService {
   static final NotificationService _instance = NotificationService._internal();
   factory NotificationService() => _instance;
@@ -26,12 +29,32 @@ class NotificationService {
 
   final AudioPlayer _audioPlayer = AudioPlayer();
 
-  Future<void> playNotificationSound() async {
+  Future<void> playSound(MessageSoundType type) async {
     try {
+      double playbackRate = 1.0;
+      switch (type) {
+        case MessageSoundType.sent:
+          playbackRate = 1.2;
+          break;
+        case MessageSoundType.received:
+          playbackRate = 1.0;
+          break;
+        case MessageSoundType.system:
+          playbackRate = 0.8;
+          break;
+        case MessageSoundType.reminder:
+          playbackRate = 1.3;
+          break;
+      }
+      await _audioPlayer.setPlaybackRate(playbackRate);
       await _audioPlayer.play(AssetSource('notification.mp3'));
     } catch (e) {
       debugPrint('Error playing notification sound: $e');
     }
+  }
+
+  Future<void> playNotificationSound() async {
+    await playSound(MessageSoundType.received);
   }
 
   void dispose() {
@@ -2075,14 +2098,19 @@ class ChatScreen extends StatefulWidget {
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
-class _ChatScreenState extends State<ChatScreen> {
+class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   bool _takeoverMode = false;
   bool _isSending = false;
   bool _showCommands = false;
-  bool _showSystemResponses = false;
+  bool _showXmlTags = false;
+  bool _showSystemResponses = true;
   final Map<int, bool> _systemMessageExpanded = {};
+
+  late AnimationController _clearAnimationController;
+  late Animation<double> _clearFadeAnimation;
+  late Animation<double> _clearScaleAnimation;
 
   // Track which message indices should animate (typewriter effect)
   // Only new messages received via WebSocket should animate, not loaded from history
@@ -2118,6 +2146,20 @@ class _ChatScreenState extends State<ChatScreen> {
       'command': '/clear',
       'description': 'Clear full conversation & context window',
     },
+    {'command': '/files', 'description': 'List files in the out folder'},
+  ];
+
+  // Available XML tag snippets shown when user types '<'
+  static const List<Map<String, String>> _xmlTags = [
+    {'tag': '<message>', 'description': 'Send a message to user'},
+    {'tag': '<terminal>', 'description': 'Execute terminal command'},
+    {'tag': '<give>', 'description': 'Send file from out folder'},
+    {'tag': '<app>', 'description': 'Create web application'},
+    {'tag': '<deploy>', 'description': 'Publish web application'},
+    {'tag': '<skill>', 'description': 'Load skill context'},
+    {'tag': '<calendar>', 'description': 'Schedule calendar event'},
+    {'tag': '<thought>', 'description': 'Internal thought (not sent to user)'},
+    {'tag': '<system>', 'description': 'Request system info (time, memory)'},
   ];
 
   /// Returns the subset of commands that match the current input (search filter).
@@ -2126,6 +2168,15 @@ class _ChatScreenState extends State<ChatScreen> {
     if (query == '/') return _commands;
     return _commands
         .where((c) => c['command']!.toLowerCase().startsWith(query))
+        .toList();
+  }
+
+  /// Returns the subset of XML tags that match the current input (search filter).
+  List<Map<String, String>> get _filteredXmlTags {
+    final query = _controller.text.toLowerCase();
+    if (query == '<') return _xmlTags;
+    return _xmlTags
+        .where((c) => c['tag']!.toLowerCase().startsWith(query))
         .toList();
   }
 
@@ -2425,7 +2476,7 @@ class _ChatScreenState extends State<ChatScreen> {
       _messages.add(
         ChatMessage(
           role: 'system',
-          content: 'Clearing conversation...',
+          content: '✨ Clearing conversation...',
           timestamp: DateTime.now(),
           isRead: true,
         ),
@@ -2434,13 +2485,19 @@ class _ChatScreenState extends State<ChatScreen> {
     _persistMessages();
     _scrollToBottom();
 
+    // Play satisfying sound
+    NotificationService().playSound(MessageSoundType.system);
+
+    // Animate fade out
+    await _clearAnimationController.forward();
+
     // Try to send to server, but clear locally regardless
     await ApiService().sendMessage(widget.agent.id.toString(), '/clear');
 
     if (!mounted) return;
 
-    // Clear locally
-    await Future.delayed(const Duration(milliseconds: 200));
+    // Reset animation and clear messages
+    _clearAnimationController.reset();
 
     if (mounted) {
       setState(() {
@@ -2679,20 +2736,25 @@ class _ChatScreenState extends State<ChatScreen> {
       if (contextData != null) {
         final buffer = StringBuffer();
 
-        if (contextData['systemPrompt'] != null) {
+        if (contextData['systemPrompt'] != null &&
+            contextData['systemPrompt'].toString().isNotEmpty) {
           buffer.writeln('=== SYSTEM PROMPT ===');
           buffer.writeln(contextData['systemPrompt']);
           buffer.writeln();
         }
 
-        if (contextData['skills'] != null) {
-          buffer.writeln('=== SKILLS ===');
-          final skills = contextData['skills'] as List<dynamic>;
-          for (final skill in skills) {
-            buffer.writeln('--- ${skill['title']} ---');
-            buffer.writeln(skill['content']);
-            buffer.writeln();
-          }
+        if (contextData['agentPersonality'] != null &&
+            contextData['agentPersonality'].toString().isNotEmpty) {
+          buffer.writeln('=== AGENT PERSONALITY ===');
+          buffer.writeln(contextData['agentPersonality']);
+          buffer.writeln();
+        }
+
+        if (contextData['globalContext'] != null &&
+            contextData['globalContext'].toString().isNotEmpty) {
+          buffer.writeln('=== GLOBAL CONTEXT ===');
+          buffer.writeln(contextData['globalContext']);
+          buffer.writeln();
         }
 
         if (contextData['history'] != null) {
@@ -2701,8 +2763,15 @@ class _ChatScreenState extends State<ChatScreen> {
           final reversedHistory = history.reversed.toList();
           for (final entry in reversedHistory) {
             final role = entry['role'] ?? 'unknown';
-            final content = entry['content'] ?? '';
+            var content = entry['content'] ?? '';
             final timestamp = entry['timestamp'] ?? '';
+
+            // Decrypt content if it's encrypted
+            if (content.startsWith('enc:')) {
+              content = ApiService().decrypt(content);
+            } else if (content.startsWith('cbc:')) {
+              content = ApiService().decrypt(content);
+            }
             // Format timestamp (e.g., "2026-03-22 15:30:00")
             String timestampStr = '';
             if (timestamp.isNotEmpty && timestamp != 'null') {
@@ -2793,6 +2862,22 @@ class _ChatScreenState extends State<ChatScreen> {
   void initState() {
     super.initState();
     _backgroundId = widget.agent.background;
+    _clearAnimationController = AnimationController(
+      duration: const Duration(milliseconds: 600),
+      vsync: this,
+    );
+    _clearFadeAnimation = Tween<double>(begin: 1.0, end: 0.0).animate(
+      CurvedAnimation(
+        parent: _clearAnimationController,
+        curve: Curves.easeOutCubic,
+      ),
+    );
+    _clearScaleAnimation = Tween<double>(begin: 1.0, end: 0.8).animate(
+      CurvedAnimation(
+        parent: _clearAnimationController,
+        curve: Curves.easeOutCubic,
+      ),
+    );
     _loadBackgroundPreference();
     _loadSystemVisibilityPreference();
     _loadMessages();
@@ -2821,6 +2906,7 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             );
         });
+        _clearLocalMessageStorage();
         _persistMessages();
         _scrollToBottom();
         return;
@@ -2878,8 +2964,16 @@ class _ChatScreenState extends State<ChatScreen> {
           }
         });
 
-        if ((isAssistant || isReminder || isSystem) && content.isNotEmpty) {
-          _showNotification(content);
+        if (content.isNotEmpty) {
+          if (isReminder) {
+            NotificationService().playSound(MessageSoundType.reminder);
+            _showNotification(content);
+          } else if (isSystem) {
+            NotificationService().playSound(MessageSoundType.system);
+          } else if (isAssistant) {
+            NotificationService().playSound(MessageSoundType.received);
+            _showNotification(content);
+          }
         }
       }
     });
@@ -2986,6 +3080,13 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  Future<void> _clearLocalMessageStorage() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('chat_messages_${widget.agent.id}');
+    } catch (_) {}
+  }
+
   void _processPendingReminders() {
     if (_pendingReminders.isEmpty) return;
     if (_hasActiveTypewriter) return; // Wait for more animations
@@ -3002,6 +3103,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _scrollToBottom();
 
     if (lastReminderContent != null && lastReminderContent!.isNotEmpty) {
+      NotificationService().playSound(MessageSoundType.reminder);
       _showNotification(lastReminderContent!);
     }
   }
@@ -3054,6 +3156,7 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         );
       });
+      NotificationService().playSound(MessageSoundType.sent);
       _rejectTagsWithEnd(text);
       _controller.clear();
       return;
@@ -3071,6 +3174,7 @@ class _ChatScreenState extends State<ChatScreen> {
           isRead: true,
         ),
       );
+      NotificationService().playSound(MessageSoundType.sent);
       if (isSystemExecution) {
         _messages.add(
           ChatMessage(
@@ -3131,6 +3235,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 isRead: true,
               ),
             );
+            NotificationService().playSound(MessageSoundType.system);
           }
         }
       } else {
@@ -3147,6 +3252,7 @@ class _ChatScreenState extends State<ChatScreen> {
             isRead: true,
           ),
         );
+        NotificationService().playSound(MessageSoundType.system);
       }
     });
     _persistMessages();
@@ -3170,6 +3276,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _wsSubscription?.cancel();
     _controller.dispose();
     _scrollController.dispose();
+    _clearAnimationController.dispose();
     super.dispose();
   }
 
@@ -3418,33 +3525,45 @@ class _ChatScreenState extends State<ChatScreen> {
           Column(
             children: [
               Expanded(
-                child: ListView.builder(
-                  controller: _scrollController,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 8,
-                  ),
-                  itemCount: _visibleMessages.length + (_isSending ? 1 : 0),
-                  itemBuilder: (context, index) {
-                    if (_isSending && index == _visibleMessages.length) {
-                      return const _ThinkingBubble();
-                    }
-                    final msg = _visibleMessages[index];
-                    final isUser = msg.role == 'user';
-                    final isSystem = msg.role == 'system';
-                    final isReminder = msg.role == 'reminder';
-                    final isFirst =
-                        index == 0 ||
-                        _visibleMessages[index - 1].role != msg.role;
-                    return _buildMessageBubble(
-                      msg,
-                      isUser,
-                      isSystem,
-                      isReminder,
-                      isFirst,
-                      index,
+                child: AnimatedBuilder(
+                  animation: _clearAnimationController,
+                  builder: (context, child) {
+                    return FadeTransition(
+                      opacity: _clearFadeAnimation,
+                      child: ScaleTransition(
+                        scale: _clearScaleAnimation,
+                        child: child,
+                      ),
                     );
                   },
+                  child: ListView.builder(
+                    controller: _scrollController,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    itemCount: _visibleMessages.length + (_isSending ? 1 : 0),
+                    itemBuilder: (context, index) {
+                      if (_isSending && index == _visibleMessages.length) {
+                        return const _ThinkingBubble();
+                      }
+                      final msg = _visibleMessages[index];
+                      final isUser = msg.role == 'user';
+                      final isSystem = msg.role == 'system';
+                      final isReminder = msg.role == 'reminder';
+                      final isFirst =
+                          index == 0 ||
+                          _visibleMessages[index - 1].role != msg.role;
+                      return _buildMessageBubble(
+                        msg,
+                        isUser,
+                        isSystem,
+                        isReminder,
+                        isFirst,
+                        index,
+                      );
+                    },
+                  ),
                 ),
               ),
               _buildInputArea(),
@@ -3995,10 +4114,10 @@ class _ChatScreenState extends State<ChatScreen> {
                       maxLines: null,
                       textInputAction: TextInputAction.newline,
                       onChanged: (value) {
-                        // Show palette on '/' and keep it open for search filtering.
-                        // Hide when the text is empty or no longer starts with '/'
+                        // Show palette on '/' for commands and '<' for XML tags
                         setState(() {
                           _showCommands = value.startsWith('/');
+                          _showXmlTags = value.startsWith('<');
                         });
                       },
                       style: TextStyle(
@@ -4008,7 +4127,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       decoration: InputDecoration(
                         hintText: _takeoverMode
                             ? 'Enter command (e.g., <terminal>ls</terminal>)'
-                            : 'Message... or type / for commands',
+                            : 'Message... or type / for commands, < for XML tags',
                         hintStyle: const TextStyle(color: Color(0xFF3F3F46)),
                         filled: true,
                         fillColor: const Color(0xFF1A1A1A),
@@ -4063,8 +4182,92 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
             if (_showCommands && _filteredCommands.isNotEmpty)
               _buildCommandPalette(),
+            if (_showXmlTags && _filteredXmlTags.isNotEmpty)
+              _buildXmlTagPalette(),
           ],
         ),
+      ),
+    );
+  }
+
+  /// XML tag palette widget shown when user types '<'.
+  Widget _buildXmlTagPalette() {
+    final tags = _filteredXmlTags;
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF18181B),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF27272A)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: Text(
+              'XML TAGS',
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF52525B),
+                letterSpacing: 1,
+              ),
+            ),
+          ),
+          ...List.generate(tags.length, (index) {
+            final tag = tags[index];
+            return InkWell(
+              onTap: () {
+                // Insert tag into text field for user to edit before sending
+                _controller.text = tag['tag']!;
+                _controller.selection = TextSelection.fromPosition(
+                  TextPosition(offset: _controller.text.length),
+                );
+                setState(() => _showXmlTags = false);
+              },
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 10,
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF10B981).withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        tag['tag']!,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          fontFamily: 'monospace',
+                          color: Color(0xFF10B981),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        tag['description']!,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          color: Color(0xFFA1A1AA),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }),
+        ],
       ),
     );
   }
@@ -4099,10 +4302,12 @@ class _ChatScreenState extends State<ChatScreen> {
             final cmd = cmds[index];
             return InkWell(
               onTap: () {
-                // Selecting a command executes it immediately
-                _controller.clear();
+                // Insert command into text field for user to edit before sending
+                _controller.text = cmd['command']!;
+                _controller.selection = TextSelection.fromPosition(
+                  TextPosition(offset: _controller.text.length),
+                );
                 setState(() => _showCommands = false);
-                _sendCommand(cmd['command']!);
               },
               child: Padding(
                 padding: const EdgeInsets.symmetric(
@@ -6163,6 +6368,62 @@ class _AppsScreenState extends State<AppsScreen> {
     }
   }
 
+  Future<void> _openApp(dynamic app) async {
+    final url = '${ApiService().baseUrl}${app['url']}';
+    final uri = Uri.parse(url);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } else {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not open ${app['name']}')),
+        );
+      }
+    }
+  }
+
+  Future<void> _showDeleteDialog(dynamic app) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF18181B),
+        title: const Text('Delete App', style: TextStyle(color: Colors.white)),
+        content: Text(
+          'Are you sure you want to delete "${app['name']}"?',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      final success = await ApiService().deleteApp(
+        app['agentId'].toString(),
+        app['name'],
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(success ? 'App deleted' : 'Failed to delete app'),
+            backgroundColor: success ? Colors.green : Colors.red,
+          ),
+        );
+        if (success) {
+          _fetchApps();
+        }
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
@@ -6230,21 +6491,24 @@ class _AppsScreenState extends State<AppsScreen> {
                     'Agent: ${app['agentName']} | Container: ${app['containerId']}',
                     style: const TextStyle(color: Colors.grey),
                   ),
-                  trailing: const Icon(
-                    LucideIcons.chevronRight,
-                    color: Colors.grey,
-                  ),
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => AppViewerScreen(
-                          appName: app['name'],
-                          url: '${ApiService().baseUrl}${app['url']}',
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: const Icon(
+                          LucideIcons.trash2,
+                          color: Colors.redAccent,
+                          size: 20,
                         ),
+                        onPressed: () => _showDeleteDialog(app),
                       ),
-                    );
-                  },
+                      const Icon(
+                        LucideIcons.externalLink,
+                        color: Color(0xFF10B981),
+                      ),
+                    ],
+                  ),
+                  onTap: () => _openApp(app),
                 ),
               );
             },
