@@ -115,6 +115,173 @@ class ChatBackgroundPreferences {
   }
 }
 
+class ParsedMessage {
+  final String text;
+  final String thought;
+  final List<String> terminals;
+  final bool hasTags;
+
+  ParsedMessage({
+    required this.text,
+    this.thought = '',
+    this.terminals = const [],
+    this.hasTags = false,
+  });
+}
+
+ParsedMessage _parseMessageContent(String rawContent) {
+  if (!rawContent.contains('<')) {
+    return ParsedMessage(text: rawContent);
+  }
+
+  final RegExp messageExp = RegExp(r'<message>(.*?)</message>', dotAll: true, caseSensitive: false);
+  final RegExp thoughtExp = RegExp(r'<thought>(.*?)</thought>', dotAll: true, caseSensitive: false);
+  final RegExp terminalExp = RegExp(r'<terminal>(.*?)</terminal>', dotAll: true, caseSensitive: false);
+
+  final messageMatch = messageExp.firstMatch(rawContent);
+  final thoughtMatch = thoughtExp.firstMatch(rawContent);
+  final terminalMatches = terminalExp.allMatches(rawContent);
+
+  String text = messageMatch?.group(1)?.trim() ?? '';
+  String thought = thoughtMatch?.group(1)?.trim() ?? '';
+  List<String> terminals = terminalMatches.map((m) => m.group(1)?.trim() ?? '').toList();
+
+  bool hasTags = text.isNotEmpty || thought.isNotEmpty || terminals.isNotEmpty;
+  if (!hasTags) {
+     return ParsedMessage(text: rawContent);
+  }
+
+  return ParsedMessage(
+    text: text.isNotEmpty ? text : rawContent,
+    thought: thought,
+    terminals: terminals,
+    hasTags: true,
+  );
+}
+
+class _ThoughtsAndTerminalsAccordion extends StatefulWidget {
+  final String thought;
+  final List<String> terminals;
+
+  const _ThoughtsAndTerminalsAccordion({
+    required this.thought,
+    required this.terminals,
+    Key? key,
+  }) : super(key: key);
+
+  @override
+  State<_ThoughtsAndTerminalsAccordion> createState() => _ThoughtsAndTerminalsAccordionState();
+}
+
+class _ThoughtsAndTerminalsAccordionState extends State<_ThoughtsAndTerminalsAccordion> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.thought.isEmpty && widget.terminals.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          InkWell(
+            onTap: () => setState(() => _expanded = !_expanded),
+            borderRadius: BorderRadius.circular(12),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Row(
+                children: [
+                  const Icon(LucideIcons.code, size: 14, color: Colors.white70),
+                  const SizedBox(width: 6),
+                  const Text(
+                    'Thoughts & Terminals',
+                    style: TextStyle(
+                      color: Colors.white70,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const Spacer(),
+                  Icon(
+                    _expanded ? LucideIcons.chevronUp : LucideIcons.chevronDown,
+                    size: 14,
+                    color: Colors.white70,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (_expanded)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (widget.thought.isNotEmpty) ...[
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 4),
+                      child: Text(
+                        'THOUGHT PROCESS',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white54,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      widget.thought,
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 11,
+                        color: Colors.white70,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                  if (widget.terminals.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 4),
+                      child: Text(
+                        'TERMINAL OUTPUT',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white54,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ),
+                    ...widget.terminals.map((term) => Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: Text(
+                            '> $term',
+                            style: const TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 11,
+                              color: Colors.greenAccent,
+                              height: 1.4,
+                            ),
+                          ),
+                        )),
+                  ],
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 class CalendarEventModel {
   final int id;
   final int agentId;
@@ -3733,23 +3900,39 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
               ),
             if (msg.content.isNotEmpty)
               (!isUser && !isSystem && !isReminder)
-                  ? _TypewriterText(
-                      fullText: msg.content,
-                      style: TextStyle(
-                        color: textColor,
-                        fontSize: 15,
-                        height: 1.4,
-                      ),
-                      shouldAnimate:
-                          messageIndex != null &&
-                          _animateMessages.contains(messageIndex),
-                      onAnimationComplete: messageIndex != null
-                          ? () {
-                              _animateMessages.remove(messageIndex);
-                              // Process pending reminders after typewriter finishes
-                              _processPendingReminders();
-                            }
-                          : null,
+                  ? Builder(
+                      builder: (context) {
+                        final parsed = _parseMessageContent(msg.content);
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (parsed.text.isNotEmpty)
+                              _TypewriterText(
+                                fullText: parsed.text,
+                                style: TextStyle(
+                                  color: textColor,
+                                  fontSize: 15,
+                                  height: 1.4,
+                                ),
+                                shouldAnimate:
+                                    messageIndex != null &&
+                                    _animateMessages.contains(messageIndex),
+                                onAnimationComplete: messageIndex != null
+                                    ? () {
+                                        _animateMessages.remove(messageIndex);
+                                        // Process pending reminders after typewriter finishes
+                                        _processPendingReminders();
+                                      }
+                                    : null,
+                              ),
+                            if (parsed.thought.isNotEmpty || parsed.terminals.isNotEmpty)
+                              _ThoughtsAndTerminalsAccordion(
+                                thought: parsed.thought,
+                                terminals: parsed.terminals,
+                              ),
+                          ],
+                        );
+                      },
                     )
                   : _buildSystemMessageContent(msg, messageIndex),
             const SizedBox(height: 6),
