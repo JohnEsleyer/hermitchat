@@ -2271,6 +2271,8 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   bool _isSending = false;
   bool _showCommands = false;
   bool _showXmlTags = false;
+  bool _takeoverMode = false;
+  final Map<int, bool> _systemMessageExpanded = {};
 
   late AnimationController _clearAnimationController;
   late Animation<double> _clearFadeAnimation;
