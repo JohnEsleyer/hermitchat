@@ -3170,9 +3170,12 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                 DateTime.tryParse(h['created_at'] as String? ?? '') ??
                 DateTime.now(),
           );
-        }).toList();
+        }).toList().reversed.toList();
 
-        setState(() => _messages.addAll(serverMessages));
+        setState(() {
+          _messages.clear();
+          _messages.addAll(serverMessages);
+        });
         _scrollToBottom();
 
         // Persist server messages locally for offline access
