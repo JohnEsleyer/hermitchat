@@ -2313,6 +2313,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       'description': 'Clear full conversation & context window',
     },
     {'command': '/files', 'description': 'List files in the out folder'},
+    {'command': '/give', 'description': '/give [filename] to download a file'},
   ];
 
   // Available XML tag snippets shown when user types '<'
@@ -2509,7 +2510,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     setState(() {
       _messages.add(
         ChatMessage(
-          role: 'system',
+          role: 'assistant',
           content: 'Processing $commandName...',
           timestamp: DateTime.now(),
           isRead: true,
@@ -2531,13 +2532,17 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
             response['message'] as String? ??
             response['response'] as String? ??
             '';
-        if (message.isNotEmpty) {
+        final role = response['role'] as String? ?? 'system';
+        final files = (response['files'] as List<dynamic>?)?.cast<String>();
+
+        if (message.isNotEmpty || (files != null && files.isNotEmpty)) {
           _messages.add(
             ChatMessage(
-              role: 'system',
+              role: role,
               content: message,
               timestamp: DateTime.now(),
               isRead: true,
+              files: files,
             ),
           );
         }
@@ -2624,7 +2629,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     setState(() {
       _messages.add(
         ChatMessage(
-          role: 'system',
+          role: 'assistant',
           content: statusMessage,
           timestamp: DateTime.now(),
           isRead: true,
@@ -2640,7 +2645,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     setState(() {
       _messages.add(
         ChatMessage(
-          role: 'system',
+          role: 'assistant',
           content: '✨ Clearing conversation...',
           timestamp: DateTime.now(),
           isRead: true,
