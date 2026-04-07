@@ -9,6 +9,7 @@ import 'package:lucide_icons/lucide_icons.dart';
 import 'package:audioplayers/audioplayers.dart';
 
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:image_picker/image_picker.dart';
@@ -19,6 +20,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
     FlutterLocalNotificationsPlugin();
 
+enum MessageSoundType { sent, received, system, reminder }
+
 class NotificationService {
   static final NotificationService _instance = NotificationService._internal();
   factory NotificationService() => _instance;
@@ -26,12 +29,32 @@ class NotificationService {
 
   final AudioPlayer _audioPlayer = AudioPlayer();
 
-  Future<void> playNotificationSound() async {
+  Future<void> playSound(MessageSoundType type) async {
     try {
+      double playbackRate = 1.0;
+      switch (type) {
+        case MessageSoundType.sent:
+          playbackRate = 1.2;
+          break;
+        case MessageSoundType.received:
+          playbackRate = 1.0;
+          break;
+        case MessageSoundType.system:
+          playbackRate = 0.8;
+          break;
+        case MessageSoundType.reminder:
+          playbackRate = 1.3;
+          break;
+      }
+      await _audioPlayer.setPlaybackRate(playbackRate);
       await _audioPlayer.play(AssetSource('notification.mp3'));
     } catch (e) {
       debugPrint('Error playing notification sound: $e');
     }
+  }
+
+  Future<void> playNotificationSound() async {
+    await playSound(MessageSoundType.received);
   }
 
   void dispose() {
@@ -89,6 +112,173 @@ class ChatBackgroundPreferences {
           ),
         )
         .toList();
+  }
+}
+
+class ParsedMessage {
+  final String text;
+  final String thought;
+  final List<String> terminals;
+  final bool hasTags;
+
+  ParsedMessage({
+    required this.text,
+    this.thought = '',
+    this.terminals = const [],
+    this.hasTags = false,
+  });
+}
+
+ParsedMessage _parseMessageContent(String rawContent) {
+  if (!rawContent.contains('<')) {
+    return ParsedMessage(text: rawContent);
+  }
+
+  final RegExp messageExp = RegExp(r'<message>(.*?)</message>', dotAll: true, caseSensitive: false);
+  final RegExp thoughtExp = RegExp(r'<thought>(.*?)</thought>', dotAll: true, caseSensitive: false);
+  final RegExp terminalExp = RegExp(r'<terminal>(.*?)</terminal>', dotAll: true, caseSensitive: false);
+
+  final messageMatch = messageExp.firstMatch(rawContent);
+  final thoughtMatch = thoughtExp.firstMatch(rawContent);
+  final terminalMatches = terminalExp.allMatches(rawContent);
+
+  String text = messageMatch?.group(1)?.trim() ?? '';
+  String thought = thoughtMatch?.group(1)?.trim() ?? '';
+  List<String> terminals = terminalMatches.map((m) => m.group(1)?.trim() ?? '').toList();
+
+  bool hasTags = text.isNotEmpty || thought.isNotEmpty || terminals.isNotEmpty;
+  if (!hasTags) {
+     return ParsedMessage(text: rawContent);
+  }
+
+  return ParsedMessage(
+    text: text.isNotEmpty ? text : rawContent,
+    thought: thought,
+    terminals: terminals,
+    hasTags: true,
+  );
+}
+
+class _ThoughtsAndTerminalsAccordion extends StatefulWidget {
+  final String thought;
+  final List<String> terminals;
+
+  const _ThoughtsAndTerminalsAccordion({
+    required this.thought,
+    required this.terminals,
+    Key? key,
+  }) : super(key: key);
+
+  @override
+  State<_ThoughtsAndTerminalsAccordion> createState() => _ThoughtsAndTerminalsAccordionState();
+}
+
+class _ThoughtsAndTerminalsAccordionState extends State<_ThoughtsAndTerminalsAccordion> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.thought.isEmpty && widget.terminals.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      decoration: BoxDecoration(
+        color: _expanded ? Colors.black.withValues(alpha: 0.6) : Colors.black.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          InkWell(
+            onTap: () => setState(() => _expanded = !_expanded),
+            borderRadius: BorderRadius.circular(12),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Row(
+                children: [
+                  const Icon(LucideIcons.code, size: 14, color: Colors.white70),
+                  const SizedBox(width: 6),
+                  const Text(
+                    'Thoughts & Terminals',
+                    style: TextStyle(
+                      color: Colors.white70,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const Spacer(),
+                  Icon(
+                    _expanded ? LucideIcons.chevronUp : LucideIcons.chevronDown,
+                    size: 14,
+                    color: Colors.white70,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (_expanded)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (widget.thought.isNotEmpty) ...[
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 4),
+                      child: Text(
+                        'THOUGHT PROCESS',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white54,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      widget.thought,
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 11,
+                        color: Colors.white70,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                  if (widget.terminals.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 4),
+                      child: Text(
+                        'TERMINAL OUTPUT',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white54,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ),
+                    ...widget.terminals.map((term) => Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: Text(
+                            '> $term',
+                            style: const TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 11,
+                              color: Colors.greenAccent,
+                              height: 1.4,
+                            ),
+                          ),
+                        )),
+                  ],
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
   }
 }
 
@@ -2075,14 +2265,18 @@ class ChatScreen extends StatefulWidget {
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
-class _ChatScreenState extends State<ChatScreen> {
+class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
-  bool _takeoverMode = false;
   bool _isSending = false;
   bool _showCommands = false;
-  bool _showSystemResponses = false;
+  bool _showXmlTags = false;
+  bool _takeoverMode = false;
   final Map<int, bool> _systemMessageExpanded = {};
+
+  late AnimationController _clearAnimationController;
+  late Animation<double> _clearFadeAnimation;
+  late Animation<double> _clearScaleAnimation;
 
   // Track which message indices should animate (typewriter effect)
   // Only new messages received via WebSocket should animate, not loaded from history
@@ -2118,6 +2312,21 @@ class _ChatScreenState extends State<ChatScreen> {
       'command': '/clear',
       'description': 'Clear full conversation & context window',
     },
+    {'command': '/files', 'description': 'List files in the out folder'},
+    {'command': '/give', 'description': '/give [filename] to download a file'},
+  ];
+
+  // Available XML tag snippets shown when user types '<'
+  static const List<Map<String, String>> _xmlTags = [
+    {'tag': '<message>', 'description': 'Send a message to user'},
+    {'tag': '<terminal>', 'description': 'Execute terminal command'},
+    {'tag': '<give>', 'description': 'Send file from out folder'},
+    {'tag': '<app>', 'description': 'Create web application'},
+    {'tag': '<deploy>', 'description': 'Publish web application'},
+    {'tag': '<skill>', 'description': 'Load skill context'},
+    {'tag': '<calendar>', 'description': 'Schedule calendar event'},
+    {'tag': '<thought>', 'description': 'Internal thought (not sent to user)'},
+    {'tag': '<system>', 'description': 'Request system info (time, memory)'},
   ];
 
   /// Returns the subset of commands that match the current input (search filter).
@@ -2129,8 +2338,16 @@ class _ChatScreenState extends State<ChatScreen> {
         .toList();
   }
 
+  /// Returns the subset of XML tags that match the current input (search filter).
+  List<Map<String, String>> get _filteredXmlTags {
+    final query = _controller.text.toLowerCase();
+    if (query == '<') return _xmlTags;
+    return _xmlTags
+        .where((c) => c['tag']!.toLowerCase().startsWith(query))
+        .toList();
+  }
+
   List<ChatMessage> get _visibleMessages {
-    if (_showSystemResponses) return _messages;
     return _messages.where((message) => message.role != 'system').toList();
   }
 
@@ -2293,7 +2510,7 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() {
       _messages.add(
         ChatMessage(
-          role: 'system',
+          role: 'assistant',
           content: 'Processing $commandName...',
           timestamp: DateTime.now(),
           isRead: true,
@@ -2315,13 +2532,17 @@ class _ChatScreenState extends State<ChatScreen> {
             response['message'] as String? ??
             response['response'] as String? ??
             '';
-        if (message.isNotEmpty) {
+        final role = response['role'] as String? ?? 'system';
+        final files = (response['files'] as List<dynamic>?)?.cast<String>();
+
+        if (message.isNotEmpty || (files != null && files.isNotEmpty)) {
           _messages.add(
             ChatMessage(
-              role: 'system',
+              role: role,
               content: message,
               timestamp: DateTime.now(),
               isRead: true,
+              files: files,
             ),
           );
         }
@@ -2408,7 +2629,7 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() {
       _messages.add(
         ChatMessage(
-          role: 'system',
+          role: 'assistant',
           content: statusMessage,
           timestamp: DateTime.now(),
           isRead: true,
@@ -2424,8 +2645,8 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() {
       _messages.add(
         ChatMessage(
-          role: 'system',
-          content: 'Clearing conversation...',
+          role: 'assistant',
+          content: '✨ Clearing conversation...',
           timestamp: DateTime.now(),
           isRead: true,
         ),
@@ -2434,13 +2655,19 @@ class _ChatScreenState extends State<ChatScreen> {
     _persistMessages();
     _scrollToBottom();
 
+    // Play satisfying sound
+    NotificationService().playSound(MessageSoundType.system);
+
+    // Animate fade out
+    await _clearAnimationController.forward();
+
     // Try to send to server, but clear locally regardless
     await ApiService().sendMessage(widget.agent.id.toString(), '/clear');
 
     if (!mounted) return;
 
-    // Clear locally
-    await Future.delayed(const Duration(milliseconds: 200));
+    // Reset animation and clear messages
+    _clearAnimationController.reset();
 
     if (mounted) {
       setState(() {
@@ -2679,20 +2906,25 @@ class _ChatScreenState extends State<ChatScreen> {
       if (contextData != null) {
         final buffer = StringBuffer();
 
-        if (contextData['systemPrompt'] != null) {
+        if (contextData['systemPrompt'] != null &&
+            contextData['systemPrompt'].toString().isNotEmpty) {
           buffer.writeln('=== SYSTEM PROMPT ===');
           buffer.writeln(contextData['systemPrompt']);
           buffer.writeln();
         }
 
-        if (contextData['skills'] != null) {
-          buffer.writeln('=== SKILLS ===');
-          final skills = contextData['skills'] as List<dynamic>;
-          for (final skill in skills) {
-            buffer.writeln('--- ${skill['title']} ---');
-            buffer.writeln(skill['content']);
-            buffer.writeln();
-          }
+        if (contextData['agentPersonality'] != null &&
+            contextData['agentPersonality'].toString().isNotEmpty) {
+          buffer.writeln('=== AGENT PERSONALITY ===');
+          buffer.writeln(contextData['agentPersonality']);
+          buffer.writeln();
+        }
+
+        if (contextData['globalContext'] != null &&
+            contextData['globalContext'].toString().isNotEmpty) {
+          buffer.writeln('=== GLOBAL CONTEXT ===');
+          buffer.writeln(contextData['globalContext']);
+          buffer.writeln();
         }
 
         if (contextData['history'] != null) {
@@ -2701,8 +2933,15 @@ class _ChatScreenState extends State<ChatScreen> {
           final reversedHistory = history.reversed.toList();
           for (final entry in reversedHistory) {
             final role = entry['role'] ?? 'unknown';
-            final content = entry['content'] ?? '';
+            var content = entry['content'] ?? '';
             final timestamp = entry['timestamp'] ?? '';
+
+            // Decrypt content if it's encrypted
+            if (content.startsWith('enc:')) {
+              content = ApiService().decrypt(content);
+            } else if (content.startsWith('cbc:')) {
+              content = ApiService().decrypt(content);
+            }
             // Format timestamp (e.g., "2026-03-22 15:30:00")
             String timestampStr = '';
             if (timestamp.isNotEmpty && timestamp != 'null') {
@@ -2793,8 +3032,23 @@ class _ChatScreenState extends State<ChatScreen> {
   void initState() {
     super.initState();
     _backgroundId = widget.agent.background;
+    _clearAnimationController = AnimationController(
+      duration: const Duration(milliseconds: 600),
+      vsync: this,
+    );
+    _clearFadeAnimation = Tween<double>(begin: 1.0, end: 0.0).animate(
+      CurvedAnimation(
+        parent: _clearAnimationController,
+        curve: Curves.easeOutCubic,
+      ),
+    );
+    _clearScaleAnimation = Tween<double>(begin: 1.0, end: 0.8).animate(
+      CurvedAnimation(
+        parent: _clearAnimationController,
+        curve: Curves.easeOutCubic,
+      ),
+    );
     _loadBackgroundPreference();
-    _loadSystemVisibilityPreference();
     _loadMessages();
 
     // Mark messages as seen when conversation is opened
@@ -2821,6 +3075,7 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             );
         });
+        _clearLocalMessageStorage();
         _persistMessages();
         _scrollToBottom();
         return;
@@ -2878,8 +3133,16 @@ class _ChatScreenState extends State<ChatScreen> {
           }
         });
 
-        if ((isAssistant || isReminder || isSystem) && content.isNotEmpty) {
-          _showNotification(content);
+        if (content.isNotEmpty) {
+          if (isReminder) {
+            NotificationService().playSound(MessageSoundType.reminder);
+            _showNotification(content);
+          } else if (isSystem) {
+            NotificationService().playSound(MessageSoundType.system);
+          } else if (isAssistant) {
+            NotificationService().playSound(MessageSoundType.received);
+            _showNotification(content);
+          }
         }
       }
     });
@@ -2892,20 +3155,6 @@ class _ChatScreenState extends State<ChatScreen> {
     );
     if (!mounted) return;
     setState(() => _backgroundId = backgroundId);
-  }
-
-  Future<void> _loadSystemVisibilityPreference() async {
-    final prefs = await SharedPreferences.getInstance();
-    final value = prefs.getBool('show_system_responses');
-    if (!mounted || value == null) return;
-    setState(() => _showSystemResponses = value);
-  }
-
-  Future<void> _setShowSystemResponses(bool value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('show_system_responses', value);
-    if (!mounted) return;
-    setState(() => _showSystemResponses = value);
   }
 
   /// Loads conversation history from server, falling back to local storage.
@@ -2926,9 +3175,12 @@ class _ChatScreenState extends State<ChatScreen> {
                 DateTime.tryParse(h['created_at'] as String? ?? '') ??
                 DateTime.now(),
           );
-        }).toList();
+        }).toList().reversed.toList();
 
-        setState(() => _messages.addAll(serverMessages));
+        setState(() {
+          _messages.clear();
+          _messages.addAll(serverMessages);
+        });
         _scrollToBottom();
 
         // Persist server messages locally for offline access
@@ -2986,6 +3238,13 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  Future<void> _clearLocalMessageStorage() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('chat_messages_${widget.agent.id}');
+    } catch (_) {}
+  }
+
   void _processPendingReminders() {
     if (_pendingReminders.isEmpty) return;
     if (_hasActiveTypewriter) return; // Wait for more animations
@@ -3002,6 +3261,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _scrollToBottom();
 
     if (lastReminderContent != null && lastReminderContent!.isNotEmpty) {
+      NotificationService().playSound(MessageSoundType.reminder);
       _showNotification(lastReminderContent!);
     }
   }
@@ -3054,6 +3314,7 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         );
       });
+      NotificationService().playSound(MessageSoundType.sent);
       _rejectTagsWithEnd(text);
       _controller.clear();
       return;
@@ -3071,6 +3332,7 @@ class _ChatScreenState extends State<ChatScreen> {
           isRead: true,
         ),
       );
+      NotificationService().playSound(MessageSoundType.sent);
       if (isSystemExecution) {
         _messages.add(
           ChatMessage(
@@ -3131,6 +3393,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 isRead: true,
               ),
             );
+            NotificationService().playSound(MessageSoundType.system);
           }
         }
       } else {
@@ -3147,6 +3410,7 @@ class _ChatScreenState extends State<ChatScreen> {
             isRead: true,
           ),
         );
+        NotificationService().playSound(MessageSoundType.system);
       }
     });
     _persistMessages();
@@ -3170,6 +3434,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _wsSubscription?.cancel();
     _controller.dispose();
     _scrollController.dispose();
+    _clearAnimationController.dispose();
     super.dispose();
   }
 
@@ -3328,9 +3593,6 @@ class _ChatScreenState extends State<ChatScreen> {
                 case 'clear':
                   _sendCommand('/clear');
                   break;
-                case 'show_system':
-                  _setShowSystemResponses(!_showSystemResponses);
-                  break;
                 case 'metrics':
                   _showMetrics();
                   break;
@@ -3418,33 +3680,45 @@ class _ChatScreenState extends State<ChatScreen> {
           Column(
             children: [
               Expanded(
-                child: ListView.builder(
-                  controller: _scrollController,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 8,
-                  ),
-                  itemCount: _visibleMessages.length + (_isSending ? 1 : 0),
-                  itemBuilder: (context, index) {
-                    if (_isSending && index == _visibleMessages.length) {
-                      return const _ThinkingBubble();
-                    }
-                    final msg = _visibleMessages[index];
-                    final isUser = msg.role == 'user';
-                    final isSystem = msg.role == 'system';
-                    final isReminder = msg.role == 'reminder';
-                    final isFirst =
-                        index == 0 ||
-                        _visibleMessages[index - 1].role != msg.role;
-                    return _buildMessageBubble(
-                      msg,
-                      isUser,
-                      isSystem,
-                      isReminder,
-                      isFirst,
-                      index,
+                child: AnimatedBuilder(
+                  animation: _clearAnimationController,
+                  builder: (context, child) {
+                    return FadeTransition(
+                      opacity: _clearFadeAnimation,
+                      child: ScaleTransition(
+                        scale: _clearScaleAnimation,
+                        child: child,
+                      ),
                     );
                   },
+                  child: ListView.builder(
+                    controller: _scrollController,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    itemCount: _visibleMessages.length + (_isSending ? 1 : 0),
+                    itemBuilder: (context, index) {
+                      if (_isSending && index == _visibleMessages.length) {
+                        return const _ThinkingBubble();
+                      }
+                      final msg = _visibleMessages[index];
+                      final isUser = msg.role == 'user';
+                      final isSystem = msg.role == 'system';
+                      final isReminder = msg.role == 'reminder';
+                      final isFirst =
+                          index == 0 ||
+                          _visibleMessages[index - 1].role != msg.role;
+                      return _buildMessageBubble(
+                        msg,
+                        isUser,
+                        isSystem,
+                        isReminder,
+                        isFirst,
+                        index,
+                      );
+                    },
+                  ),
                 ),
               ),
               _buildInputArea(),
@@ -3613,24 +3887,40 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
               ),
             if (msg.content.isNotEmpty)
-              (!isUser && !isSystem && !isReminder)
-                  ? _TypewriterText(
-                      fullText: msg.content,
-                      style: TextStyle(
-                        color: textColor,
-                        fontSize: 15,
-                        height: 1.4,
-                      ),
-                      shouldAnimate:
-                          messageIndex != null &&
-                          _animateMessages.contains(messageIndex),
-                      onAnimationComplete: messageIndex != null
-                          ? () {
-                              _animateMessages.remove(messageIndex);
-                              // Process pending reminders after typewriter finishes
-                              _processPendingReminders();
-                            }
-                          : null,
+              (!isSystem && !isReminder)
+                  ? Builder(
+                      builder: (context) {
+                        final parsed = _parseMessageContent(msg.content);
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (parsed.text.isNotEmpty)
+                              _TypewriterText(
+                                fullText: parsed.text,
+                                style: TextStyle(
+                                  color: textColor,
+                                  fontSize: 15,
+                                  height: 1.4,
+                                ),
+                                shouldAnimate:
+                                    messageIndex != null &&
+                                    _animateMessages.contains(messageIndex),
+                                onAnimationComplete: messageIndex != null
+                                    ? () {
+                                        _animateMessages.remove(messageIndex);
+                                        // Process pending reminders after typewriter finishes
+                                        _processPendingReminders();
+                                      }
+                                    : null,
+                              ),
+                            if (parsed.thought.isNotEmpty || parsed.terminals.isNotEmpty)
+                              _ThoughtsAndTerminalsAccordion(
+                                thought: parsed.thought,
+                                terminals: parsed.terminals,
+                              ),
+                          ],
+                        );
+                      },
                     )
                   : _buildSystemMessageContent(msg, messageIndex),
             const SizedBox(height: 6),
@@ -3889,70 +4179,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     return const Color(0xFF52525B);
                   }),
                 ),
-                const SizedBox(width: 12),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      'System',
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF52525B),
-                        letterSpacing: 1,
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    GestureDetector(
-                      onTap: () {
-                        showDialog(
-                          context: context,
-                          builder: (context) => AlertDialog(
-                            backgroundColor: const Color(0xFF18181B),
-                            title: const Text(
-                              'System Messages',
-                              style: TextStyle(color: Colors.white),
-                            ),
-                            content: const Text(
-                              'Toggle to show/hide system messages in the chat. System messages include internal events, calendar actions, and execution feedback.',
-                              style: TextStyle(color: Color(0xFFA1A1AA)),
-                            ),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(context),
-                                child: const Text(
-                                  'Got it',
-                                  style: TextStyle(color: Colors.white),
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-                      },
-                      child: const Icon(
-                        LucideIcons.helpCircle,
-                        size: 14,
-                        color: Color(0xFF52525B),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Switch(
-                      value: _showSystemResponses,
-                      onChanged: (val) =>
-                          setState(() => _showSystemResponses = val),
-                      activeTrackColor: const Color(
-                        0xFF10B981,
-                      ).withValues(alpha: 0.5),
-                      inactiveTrackColor: const Color(0xFF1A1A1A),
-                      thumbColor: WidgetStateProperty.resolveWith((states) {
-                        if (states.contains(WidgetState.selected)) {
-                          return const Color(0xFF10B981);
-                        }
-                        return const Color(0xFF52525B);
-                      }),
-                    ),
-                  ],
-                ),
+
                 const Spacer(),
                 if (_takeoverMode)
                   Container(
@@ -3995,10 +4222,10 @@ class _ChatScreenState extends State<ChatScreen> {
                       maxLines: null,
                       textInputAction: TextInputAction.newline,
                       onChanged: (value) {
-                        // Show palette on '/' and keep it open for search filtering.
-                        // Hide when the text is empty or no longer starts with '/'
+                        // Show palette on '/' for commands and '<' for XML tags
                         setState(() {
                           _showCommands = value.startsWith('/');
+                          _showXmlTags = value.startsWith('<');
                         });
                       },
                       style: TextStyle(
@@ -4008,7 +4235,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       decoration: InputDecoration(
                         hintText: _takeoverMode
                             ? 'Enter command (e.g., <terminal>ls</terminal>)'
-                            : 'Message... or type / for commands',
+                            : 'Message... or type / for commands, < for XML tags',
                         hintStyle: const TextStyle(color: Color(0xFF3F3F46)),
                         filled: true,
                         fillColor: const Color(0xFF1A1A1A),
@@ -4063,8 +4290,92 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
             if (_showCommands && _filteredCommands.isNotEmpty)
               _buildCommandPalette(),
+            if (_showXmlTags && _filteredXmlTags.isNotEmpty)
+              _buildXmlTagPalette(),
           ],
         ),
+      ),
+    );
+  }
+
+  /// XML tag palette widget shown when user types '<'.
+  Widget _buildXmlTagPalette() {
+    final tags = _filteredXmlTags;
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF18181B),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF27272A)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: Text(
+              'XML TAGS',
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF52525B),
+                letterSpacing: 1,
+              ),
+            ),
+          ),
+          ...List.generate(tags.length, (index) {
+            final tag = tags[index];
+            return InkWell(
+              onTap: () {
+                // Insert tag into text field for user to edit before sending
+                _controller.text = tag['tag']!;
+                _controller.selection = TextSelection.fromPosition(
+                  TextPosition(offset: _controller.text.length),
+                );
+                setState(() => _showXmlTags = false);
+              },
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 10,
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF10B981).withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        tag['tag']!,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          fontFamily: 'monospace',
+                          color: Color(0xFF10B981),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        tag['description']!,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          color: Color(0xFFA1A1AA),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }),
+        ],
       ),
     );
   }
@@ -4099,10 +4410,12 @@ class _ChatScreenState extends State<ChatScreen> {
             final cmd = cmds[index];
             return InkWell(
               onTap: () {
-                // Selecting a command executes it immediately
-                _controller.clear();
+                // Insert command into text field for user to edit before sending
+                _controller.text = cmd['command']!;
+                _controller.selection = TextSelection.fromPosition(
+                  TextPosition(offset: _controller.text.length),
+                );
                 setState(() => _showCommands = false);
-                _sendCommand(cmd['command']!);
               },
               child: Padding(
                 padding: const EdgeInsets.symmetric(
@@ -6163,6 +6476,62 @@ class _AppsScreenState extends State<AppsScreen> {
     }
   }
 
+  Future<void> _openApp(dynamic app) async {
+    final url = '${ApiService().baseUrl}${app['url']}';
+    final uri = Uri.parse(url);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } else {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not open ${app['name']}')),
+        );
+      }
+    }
+  }
+
+  Future<void> _showDeleteDialog(dynamic app) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF18181B),
+        title: const Text('Delete App', style: TextStyle(color: Colors.white)),
+        content: Text(
+          'Are you sure you want to delete "${app['name']}"?',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      final success = await ApiService().deleteApp(
+        app['agentId'].toString(),
+        app['name'],
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(success ? 'App deleted' : 'Failed to delete app'),
+            backgroundColor: success ? Colors.green : Colors.red,
+          ),
+        );
+        if (success) {
+          _fetchApps();
+        }
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
@@ -6230,21 +6599,24 @@ class _AppsScreenState extends State<AppsScreen> {
                     'Agent: ${app['agentName']} | Container: ${app['containerId']}',
                     style: const TextStyle(color: Colors.grey),
                   ),
-                  trailing: const Icon(
-                    LucideIcons.chevronRight,
-                    color: Colors.grey,
-                  ),
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => AppViewerScreen(
-                          appName: app['name'],
-                          url: '${ApiService().baseUrl}${app['url']}',
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: const Icon(
+                          LucideIcons.trash2,
+                          color: Colors.redAccent,
+                          size: 20,
                         ),
+                        onPressed: () => _showDeleteDialog(app),
                       ),
-                    );
-                  },
+                      const Icon(
+                        LucideIcons.externalLink,
+                        color: Color(0xFF10B981),
+                      ),
+                    ],
+                  ),
+                  onTap: () => _openApp(app),
                 ),
               );
             },
